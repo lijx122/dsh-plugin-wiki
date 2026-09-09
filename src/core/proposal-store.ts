@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import type { Proposal, ProposalType } from '../types.js';
 
 const PROPOSALS_FILE = 'proposals.json';
@@ -71,10 +71,11 @@ export class ProposalStore {
       return { ok: false, message: `提案 ${id} 已经是 ${proposal.status} 状态，不能重复审批`, targetPath: proposal.targetRelPath };
     }
 
-    const absTarget = join(this.wikiRoot, proposal.targetRelPath);
+    const normalizedRoot = resolve(this.wikiRoot);
+    const absTarget = resolve(normalizedRoot, proposal.targetRelPath);
 
     // 路径防穿透检查
-    if (!absTarget.startsWith(this.wikiRoot)) {
+    if (!absTarget.startsWith(normalizedRoot)) {
       return { ok: false, message: '安全阻断：目标路径超出 Wiki 根目录', targetPath: proposal.targetRelPath };
     }
 
@@ -84,7 +85,7 @@ export class ProposalStore {
     if (existsSync(absTarget)) {
       const ts = new Date().toISOString().replace(/[:.]/g, '-');
       const safeName = proposal.targetRelPath.replace(/[\/\\]/g, '__');
-      const backupPath = join(this.wikiRoot, META_DIR, BACKUP_DIR, `${ts}_${safeName}`);
+      const backupPath = resolve(normalizedRoot, META_DIR, BACKUP_DIR, `${ts}_${safeName}`);
       await copyFile(absTarget, backupPath);
     }
 
