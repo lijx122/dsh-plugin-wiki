@@ -40,7 +40,6 @@
   ],
   "scripts": {
     "build": "tsc",
-    "prepare": "tsc",
     "watch": "tsc -w",
     "test": "node --test test/*.test.mjs"
   },
