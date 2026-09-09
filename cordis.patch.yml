@@ -1,0 +1,8 @@
+# dsh-plugin-wiki bundle patch
+- insert:
+    - id: dsh-plugin-wiki
+      name: dsh-plugin-wiki
+      config:
+        path: ''
+        maxContextTokens: 1500
+        autoWatch: true
