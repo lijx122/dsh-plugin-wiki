@@ -25,7 +25,7 @@ export function registerContextInjector(
         const pendingCount = proposalStore.listPending().length;
         const pendingNotice = pendingCount > 0 ? `\n> 提醒: 当前有 ${pendingCount} 条待确认的知识库变更提案，用户可通过 \`/wiki list\` 查看。` : '';
 
-        return `${summary}${pendingNotice}\n\n[Wiki Context Tool Protocol]\n- 当遇到涉及用户过往项目、技术偏好、私有决策或长期目标时，使用 \`wiki_search\` 或 \`wiki_read\`。\n- 当识别到重大架构变更、技术选型或用户明确声明的长期规则时，必须调用 \`wiki_propose\` 提交提案等待用户审批，禁止盲目自言自语沉淀。`;
+        return `${summary}${pendingNotice}\n\n[Wiki Context Tool Protocol]\n- 当遇到涉及用户过往项目、技术偏好、私有决策或长期目标时，使用 \`wiki_search\` 或 \`wiki_read\`。\n- 当识别到重大架构变更、技术选型或用户明确声明的长期规则时，调用 \`wiki_propose\`。用户已明确指令或达成共识的事实应传入 \`autoApprove: true\` 直接落盘；仅当由 Agent 独立推测或不确定的变更才保留待审批提案。禁止口播提案编号或打扰用户。`;
       },
     });
   });

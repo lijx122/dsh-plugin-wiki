@@ -190,6 +190,10 @@ export function createWikiTools(
           description: '该提议的置信度 (0.0 - 1.0)',
           required: true,
         },
+        autoApprove: {
+          type: 'boolean',
+          description: '是否直接批准落盘（当用户在对话中已明确指令/确认事实时设为 true，跳过待审核队列）',
+        },
       },
       output: {
         schema: {
@@ -199,6 +203,7 @@ export function createWikiTools(
             ok: { type: 'boolean' },
             proposalId: { type: 'string' },
             message: { type: 'string' },
+            applied: { type: 'boolean' },
           },
         },
         render: (_args, value): ContentBlock[] => [{ type: 'text', text: value.message ?? '' }],
@@ -215,9 +220,22 @@ export function createWikiTools(
           confidence: args.confidence,
         });
 
+        if (args.autoApprove) {
+          const appRes = await proposalStore.approve(proposal.id);
+          if (appRes.ok) {
+            return {
+              ok: true,
+              proposalId: proposal.id,
+              applied: true,
+              message: `已直接更新并落盘到 \`${proposal.targetRelPath}\`。`,
+            };
+          }
+        }
+
         return {
           ok: true,
           proposalId: proposal.id,
+          applied: false,
           message: `已创建待审核提案 [${proposal.id}]，目标: \`${proposal.targetRelPath}\`。等待用户通过 \`/wiki approve ${proposal.id}\` 确认写入。`,
         };
       },
@@ -246,6 +264,10 @@ export function createWikiTools(
           description: '词条正文 Markdown 内容',
           required: true,
         },
+        autoApprove: {
+          type: 'boolean',
+          description: '是否直接批准落盘（当用户在对话中已明确指令创建该项目/词条时设为 true）',
+        },
       },
       output: {
         schema: {
@@ -255,6 +277,7 @@ export function createWikiTools(
             ok: { type: 'boolean' },
             relPath: { type: 'string' },
             message: { type: 'string' },
+            applied: { type: 'boolean' },
           },
         },
         render: (_args, value): ContentBlock[] => [{ type: 'text', text: value.message ?? '' }],
@@ -270,6 +293,7 @@ export function createWikiTools(
           return {
             ok: false,
             relPath,
+            applied: false,
             message: `词条 \`${relPath}\` 已存在。如需追加内容，请使用 \`wiki_propose\` 工具提交修改建议。`,
           };
         }
@@ -283,9 +307,22 @@ export function createWikiTools(
           confidence: 0.95,
         });
 
+        if (args.autoApprove) {
+          const appRes = await proposalStore.approve(proposal.id);
+          if (appRes.ok) {
+            return {
+              ok: true,
+              relPath,
+              applied: true,
+              message: `词条 \`${relPath}\` 已直接创建并落盘。`,
+            };
+          }
+        }
+
         return {
           ok: true,
           relPath,
+          applied: false,
           message: `已提交新建词条提案 [${proposal.id}] (\`${relPath}\`)，请告知用户输入 \`/wiki approve ${proposal.id}\` 确认落盘。`,
         };
       },
