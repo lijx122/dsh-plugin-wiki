@@ -2,9 +2,7 @@ import type { Proposal, ProposalType } from '../types.js';
 export declare class ProposalStore {
     private readonly wikiRoot;
     private proposals;
-    private lastMtimeMs;
     constructor(wikiRoot: string);
-    ensureDiskSynced(): void;
     init(): Promise<void>;
     createProposal(params: {
         type: ProposalType;
@@ -14,7 +12,6 @@ export declare class ProposalStore {
         content: string;
         reason: string;
         confidence: number;
-        entityType?: string;
     }): Promise<Proposal>;
     getProposal(id: string): Proposal | undefined;
     listPending(): Proposal[];

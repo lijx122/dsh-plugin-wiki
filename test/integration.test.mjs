@@ -117,6 +117,21 @@ Alpha 项目说明，依赖 [[Beta]]。
     assert.equal(approveRes.kind, 'success');
     assert.ok(approveRes.text.includes('已批准'));
 
+    // 7.1 测试 autoApprove: true 静默直接落盘
+    const autoProposeRes = await proposeTool.execute({
+      targetRelPath: 'Project/Alpha.md',
+      title: 'Alpha 架构决策',
+      type: 'record_decision',
+      section: '架构决策',
+      content: '- 用户指示直接落盘',
+      reason: '用户明确指示',
+      confidence: 1.0,
+      autoApprove: true,
+    });
+    assert.equal(autoProposeRes.ok, true);
+    assert.equal(autoProposeRes.applied, true);
+    assert.ok(autoProposeRes.message.includes('已直接更新并落盘'));
+
     // 8. 重新通过 wiki_read 验证文件已成功写入新内容
     const readTool = registeredTools.get('wiki_read');
     const readRes = await readTool.execute({ path: 'Project/Alpha.md' });
