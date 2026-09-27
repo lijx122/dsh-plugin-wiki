@@ -1,5 +1,5 @@
 import { basename, extname } from 'node:path';
-import type { WikiDoc, WikiFrontmatter, WikiLink } from '../types.js';
+import type { HeadingItem, SectionSlice, WikiDoc, WikiFrontmatter, WikiLink } from '../types.js';
 
 /**
  * 极简健壮的 YAML Frontmatter 解析器（零第三方包依赖，纯原生）
@@ -94,18 +94,137 @@ export function extractWikiLinks(text: string): WikiLink[] {
 }
 
 /**
+ * 格式化 mtimeMs 为 YYYY-MM-DD
+ */
+export function formatMtime(mtimeMs: number): string {
+  const d = new Date(mtimeMs);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * 解析 Markdown 标题列表（包含层级、文本、行号），跳过代码块和 Frontmatter
+ */
+export function parseHeadings(markdown: string): HeadingItem[] {
+  const headings: HeadingItem[] = [];
+  const lines = markdown.split(/\r?\n/);
+
+  let inFrontmatter = false;
+  let inCodeFence: string | null = null;
+  let codeFenceLen = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    const trimmed = line.trim();
+
+    // 1. 处理 YAML Frontmatter（仅在文档起始有效）
+    if (i === 0 && trimmed === '---') {
+      inFrontmatter = true;
+      continue;
+    }
+    if (inFrontmatter) {
+      if (trimmed === '---' || trimmed === '...') {
+        inFrontmatter = false;
+      }
+      continue;
+    }
+
+    // 2. 处理代码块围栏 (``` 或 ~~~)
+    const fenceMatch = /^[ ]{0,3}(`{3,}|~{3,})/.exec(line);
+    if (fenceMatch) {
+      const fenceChar = fenceMatch[1]![0]!;
+      const fenceLen = fenceMatch[1]!.length;
+      if (inCodeFence === null) {
+        inCodeFence = fenceChar;
+        codeFenceLen = fenceLen;
+        continue;
+      } else if (inCodeFence === fenceChar && fenceLen >= codeFenceLen) {
+        // 闭合围栏
+        inCodeFence = null;
+        codeFenceLen = 0;
+        continue;
+      }
+    }
+
+    if (inCodeFence !== null) {
+      // 在代码块内部，忽略任何 # 符号
+      continue;
+    }
+
+    // 3. 匹配 Markdown 标题行: ^[ ]{0,3}(#{1,6})[ \t]+(.*)$
+    const headingMatch = /^[ ]{0,3}(#{1,6})[ \t]+(.*)$/.exec(line);
+    if (headingMatch && headingMatch[1]) {
+      const level = headingMatch[1].length;
+      const rawText = headingMatch[2] ?? '';
+      const text = rawText.replace(/[ \t]+#+[ \t]*$/, '').trim();
+      headings.push({
+        level,
+        text,
+        line: i + 1,
+      });
+    }
+  }
+
+  return headings;
+}
+
+/**
+ * 提取指定标题到下一个同级或更高级标题之间的正文内容
+ */
+export function extractSection(
+  markdown: string,
+  headingTitle: string
+): SectionSlice | null {
+  const cleanSearch = headingTitle.replace(/^#+\s*/, '').trim().toLowerCase();
+  if (!cleanSearch) return null;
+
+  const allHeadings = parseHeadings(markdown);
+  if (allHeadings.length === 0) return null;
+
+  // 1. 查找匹配的标题（优先级：完全匹配 -> 前缀匹配 -> 包含匹配 -> 逆向包含）
+  let matched = allHeadings.find((h) => h.text.trim().toLowerCase() === cleanSearch);
+  if (!matched) {
+    matched = allHeadings.find((h) => h.text.trim().toLowerCase().startsWith(cleanSearch));
+  }
+  if (!matched) {
+    matched = allHeadings.find((h) => h.text.trim().toLowerCase().includes(cleanSearch));
+  }
+  if (!matched) {
+    matched = allHeadings.find((h) => cleanSearch.includes(h.text.trim().toLowerCase()));
+  }
+
+  if (!matched) return null;
+
+  // 2. 确定正文范围：从该标题所在行的下一行开始，直到下一个同级或更高级标题（level <= matched.level）
+  const lines = markdown.split(/\r?\n/);
+  const matchedIdx = allHeadings.indexOf(matched);
+  let endLineIdx = lines.length;
+
+  for (let j = matchedIdx + 1; j < allHeadings.length; j++) {
+    if (allHeadings[j]!.level <= matched.level) {
+      endLineIdx = allHeadings[j]!.line - 1;
+      break;
+    }
+  }
+
+  const sectionLines = lines.slice(matched.line, endLineIdx);
+  const content = sectionLines.join('\n').trim();
+
+  return {
+    found: true,
+    title: matched.text,
+    level: matched.level,
+    content,
+  };
+}
+
+/**
  * 提取 Markdown 标题列表与摘要
  */
 export function extractHeadings(markdown: string): string[] {
-  const headings: string[] = [];
-  const lines = markdown.split(/\r?\n/);
-  for (const line of lines) {
-    const m = /^(#{1,6})\s+(.+)$/.exec(line.trim());
-    if (m && m[2]) {
-      headings.push(m[2].trim());
-    }
-  }
-  return headings;
+  return parseHeadings(markdown).map((h) => h.text);
 }
 
 /**
@@ -184,6 +303,28 @@ export function parseWikiDoc(
   // 推断 Status
   const status = typeof frontmatter.status === 'string' && frontmatter.status.trim() ? frontmatter.status.trim() : 'active';
 
+  // 提取 updatedAt 时效性元数据（优先 frontmatter，缺省退回文件修改时间 mtime YYYY-MM-DD）
+  let updatedAt: string | undefined = undefined;
+  if (frontmatter.updated_at) {
+    updatedAt = String(frontmatter.updated_at).trim();
+  } else if (frontmatter.updatedAt) {
+    updatedAt = String(frontmatter.updatedAt).trim();
+  } else if (frontmatter.updated) {
+    updatedAt = String(frontmatter.updated).trim();
+  }
+  if (!updatedAt && mtimeMs > 0) {
+    updatedAt = formatMtime(mtimeMs);
+  }
+
+  // 提取 supersedes 版本替代关系元数据
+  let supersedes: string[] | undefined = undefined;
+  const rawSupersedes = frontmatter.supersedes ?? frontmatter.supersede;
+  if (Array.isArray(rawSupersedes)) {
+    supersedes = rawSupersedes.map((s) => String(s).trim()).filter(Boolean);
+  } else if (typeof rawSupersedes === 'string' && rawSupersedes.trim()) {
+    supersedes = [rawSupersedes.trim()];
+  }
+
   return {
     relPath: relPath.replace(/\\/g, '/'),
     absPath,
@@ -197,5 +338,7 @@ export function parseWikiDoc(
     headings,
     summary,
     rawContent: content,
+    ...(updatedAt ? { updatedAt } : {}),
+    ...(supersedes && supersedes.length > 0 ? { supersedes } : {}),
   };
 }

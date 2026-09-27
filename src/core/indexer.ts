@@ -82,6 +82,15 @@ export class WikiIndexer {
       }
 
       if (score > 0) {
+        let updatedAt = doc.updatedAt;
+        if (!updatedAt && doc.mtimeMs > 0) {
+          const d = new Date(doc.mtimeMs);
+          const year = d.getFullYear();
+          const month = String(d.getMonth() + 1).padStart(2, '0');
+          const day = String(d.getDate()).padStart(2, '0');
+          updatedAt = `${year}-${month}-${day}`;
+        }
+
         results.push({
           relPath: doc.relPath,
           title: doc.title,
@@ -91,6 +100,8 @@ export class WikiIndexer {
           score,
           forwardLinks: this.graph.getForwardLinks(doc.relPath),
           backLinks: this.graph.getBackLinks(doc.relPath),
+          updatedAt,
+          supersedes: doc.supersedes,
         });
       }
     }

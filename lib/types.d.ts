@@ -10,6 +10,9 @@ export interface WikiFrontmatter {
     tags?: string[];
     aliases?: string[];
     updated?: string;
+    updated_at?: string;
+    updatedAt?: string;
+    supersedes?: string[] | string;
     [key: string]: unknown;
 }
 export interface WikiLink {
@@ -32,6 +35,20 @@ export interface WikiDoc {
     headings: string[];
     summary: string;
     rawContent: string;
+    updatedAt?: string;
+    supersedes?: string[];
+}
+export type WikiDocument = WikiDoc;
+export interface HeadingItem {
+    level: number;
+    text: string;
+    line: number;
+}
+export interface SectionSlice {
+    found: boolean;
+    title: string;
+    level: number;
+    content: string;
 }
 export interface SearchMatch {
     relPath: string;
@@ -42,6 +59,8 @@ export interface SearchMatch {
     score: number;
     forwardLinks: string[];
     backLinks: string[];
+    updatedAt?: string;
+    supersedes?: string[];
 }
 export type ProposalType = 'create' | 'append_section' | 'update_frontmatter' | 'record_decision';
 export type ProposalStatus = 'pending' | 'applied' | 'rejected';

@@ -35,11 +35,18 @@ export class WikiScanner {
       const fileStat = await stat(absPath);
       const cached = this.cache.entries[relPath];
 
-      if (cached && cached.mtimeMs === fileStat.mtimeMs && cached.sizeBytes === fileStat.size) {
+      if (cached && cached.mtimeMs === fileStat.mtimeMs && cached.sizeBytes === fileStat.size && cached.doc.updatedAt) {
         this.docs.set(relPath, cached.doc);
       } else {
         const content = await readFile(absPath, 'utf8');
         const doc = parseWikiDoc(relPath, absPath, content, fileStat.mtimeMs, fileStat.size);
+        if (!doc.updatedAt && fileStat.mtimeMs > 0) {
+          const d = new Date(fileStat.mtimeMs);
+          const year = d.getFullYear();
+          const month = String(d.getMonth() + 1).padStart(2, '0');
+          const day = String(d.getDate()).padStart(2, '0');
+          doc.updatedAt = `${year}-${month}-${day}`;
+        }
         this.docs.set(relPath, doc);
         this.cache.entries[relPath] = {
           mtimeMs: fileStat.mtimeMs,

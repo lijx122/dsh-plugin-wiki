@@ -4,6 +4,7 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm';
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import type { WikiGraph } from '../core/graph.js';
 import type { WikiIndexer } from '../core/indexer.js';
+import { extractSection, parseHeadings } from '../core/parser.js';
 import type { ProposalStore } from '../core/proposal-store.js';
 import type { WikiScanner } from '../core/scanner.js';
 import type { ProposalType } from '../types.js';
@@ -57,6 +58,8 @@ export function createWikiTools(
                   score: { type: 'number' },
                   forwardLinks: { type: 'array', items: { type: 'string' } },
                   backLinks: { type: 'array', items: { type: 'string' } },
+                  updatedAt: { type: 'string' },
+                  supersedes: { type: 'array', items: { type: 'string' } },
                 },
               },
             },
@@ -68,9 +71,11 @@ export function createWikiTools(
           }
           const lines = [`找到 ${value.count} 个匹配词条:`];
           for (const r of value.results) {
+            const updated = r.updatedAt ? ` [更新: ${r.updatedAt}]` : '';
+            const supersedes = r.supersedes && r.supersedes.length > 0 ? ` [取代: ${r.supersedes.join(', ')}]` : '';
             const links = r.forwardLinks && r.forwardLinks.length > 0 ? ` | 引用: [${r.forwardLinks.join(', ')}]` : '';
             const cited = r.backLinks && r.backLinks.length > 0 ? ` | 被引: [${r.backLinks.join(', ')}]` : '';
-            lines.push(`- **${r.title}** (\`${r.relPath}\`, ${r.type}/${r.status}) [得分 ${r.score}]:\n  ${r.excerpt}${links}${cited}`);
+            lines.push(`- **${r.title}** (\`${r.relPath}\`, ${r.type}/${r.status})${updated}${supersedes} [得分 ${r.score}]:\n  ${r.excerpt}${links}${cited}`);
           }
           return [{ type: 'text', text: lines.join('\n') }];
         },
@@ -81,16 +86,21 @@ export function createWikiTools(
         const filterType = typeof args.type === 'string' ? args.type : undefined;
         const rawResults = indexer.search(args.query, filterType, limit);
 
-        const results = rawResults.map((r) => ({
-          relPath: r.relPath,
-          title: r.title,
-          type: r.type,
-          status: r.status,
-          excerpt: r.excerpt,
-          score: r.score,
-          forwardLinks: r.forwardLinks,
-          backLinks: r.backLinks,
-        }));
+        const results = rawResults.map((r) => {
+          const item: any = {
+            relPath: r.relPath,
+            title: r.title,
+            type: r.type,
+            status: r.status,
+            excerpt: r.excerpt,
+            score: r.score,
+            forwardLinks: r.forwardLinks,
+            backLinks: r.backLinks,
+          };
+          if (r.updatedAt) item.updatedAt = r.updatedAt;
+          if (r.supersedes && r.supersedes.length > 0) item.supersedes = r.supersedes;
+          return item;
+        });
 
         return {
           count: results.length,
@@ -111,6 +121,14 @@ export function createWikiTools(
           description: '词条相对路径，例如 "Project/DSH.md" 或从 wiki_search 获取的 relPath',
           required: true,
         },
+        headingsOnly: {
+          type: 'boolean',
+          description: '是否仅返回词条的各级标题大纲树(TOC)，用于大纲预览与章节导航',
+        },
+        section: {
+          type: 'string',
+          description: '可选定向读取的指定标题章节名称，如 "核心决策规则" 或 "二、真实成绩基线"',
+        },
       },
       output: {
         schema: {
@@ -120,12 +138,37 @@ export function createWikiTools(
             found: { type: 'boolean' },
             relPath: { type: 'string' },
             content: { type: 'string' },
+            headings: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  level: { type: 'integer' },
+                  text: { type: 'string' },
+                  line: { type: 'integer' },
+                },
+              },
+            },
+            section: { type: 'string' },
             error: { type: 'string' },
           },
         },
         render: (_args, value): ContentBlock[] => {
           if (!value.found) {
             return [{ type: 'text', text: `错误: ${value.error ?? '无法读取'}` }];
+          }
+          if (_args?.headingsOnly || (value.headings && value.headings.length > 0 && !value.content && !value.section)) {
+            if (!value.headings || value.headings.length === 0) {
+              return [{ type: 'text', text: `### 词条大纲 (\`${value.relPath}\`):\n\n(该文档未包含有效各级标题)` }];
+            }
+            const tree = value.headings
+              .map((h: any) => `${'  '.repeat(Math.max(0, h.level - 1))}- ${'#'.repeat(h.level)} ${h.text} (L${h.line})`)
+              .join('\n');
+            return [{ type: 'text', text: `### 词条大纲 (\`${value.relPath}\`):\n\n${tree}` }];
+          }
+          if (value.section) {
+            return [{ type: 'text', text: `### 章节内容: ${value.section} (\`${value.relPath}\`):\n\n${value.content}` }];
           }
           return [{ type: 'text', text: `### 词条内容 (\`${value.relPath}\`):\n\n${value.content}` }];
         },
@@ -139,12 +182,56 @@ export function createWikiTools(
           return { found: false, relPath: cleanRel, content: '', error: '安全阻断：越界路径' };
         }
 
+        let content: string;
         try {
-          const content = await readFile(abs, 'utf8');
-          return { found: true, relPath: cleanRel, content, error: '' };
+          content = await readFile(abs, 'utf8');
         } catch (err: any) {
           return { found: false, relPath: cleanRel, content: '', error: `无法读取文件: ${err?.message || String(err)}` };
         }
+
+        // 1. 大纲模式 (headingsOnly: true)
+        if (args.headingsOnly === true) {
+          const allHeadings = parseHeadings(content);
+          // 仅返回各级标题大纲树（# 至 ####）
+          const toc = allHeadings.filter((h) => h.level >= 1 && h.level <= 4);
+          return {
+            found: true,
+            relPath: cleanRel,
+            content: '',
+            headings: toc,
+            error: '',
+          };
+        }
+
+        // 2. 定向读取指定章节 (section)
+        if (typeof args.section === 'string' && args.section.trim()) {
+          const sec = extractSection(content, args.section);
+          if (sec && sec.found) {
+            return {
+              found: true,
+              relPath: cleanRel,
+              section: sec.title,
+              content: sec.content,
+              error: '',
+            };
+          }
+
+          // 未找到指定章节，返回明确提示及所有可用大纲
+          const allHeadings = parseHeadings(content);
+          const outline = allHeadings.length > 0
+            ? allHeadings.map((h) => `${'  '.repeat(Math.max(0, h.level - 1))}- ${'#'.repeat(h.level)} ${h.text}`).join('\n')
+            : '(该词条无标题)';
+          return {
+            found: false,
+            relPath: cleanRel,
+            content: '',
+            headings: allHeadings,
+            error: `未找到章节 "${args.section}"。可用章节大纲供选择:\n${outline}`,
+          };
+        }
+
+        // 3. 默认全量读取正文
+        return { found: true, relPath: cleanRel, content, error: '' };
       },
     })
   );
