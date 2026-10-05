@@ -463,7 +463,19 @@ type: "agent"
     assert.ok(summary.includes('灵感想法'), '需列出 待整理/ 下词条');
 
     assert.ok(summary.includes('**交接记忆**：'), '需包含第 4 段：交接记忆');
-    assert.ok(summary.includes('跨会话交接'), '需提取 Agent/记忆.md 正文');
+    assert.ok(summary.includes('上次会话已完成 ProposalStore 扩展'), '需提取 Agent/记忆.md 正文段落');
+
+    // 修复断言 A：词条首行一级标题不得被当作正文粘连进档案
+    assert.ok(!summary.includes('用户画像 全栈技术实践者'), 'Self 首行一级标题不应粘连进正文');
+    assert.ok(!summary.includes('跨会话交接 上次会话'), '记忆条目首行一级标题不应粘连进正文');
+
+    // 修复断言 B：同一条目不得在多个段落重复出现（最近变更只保留净增量）
+    const bulletTitles = summary
+      .split('\n')
+      .filter((line) => line.startsWith('- **'))
+      .map((line) => (line.match(/\*\*([^*]+)\*\*/) || [])[1]);
+    const duplicated = bulletTitles.filter((t, i) => t && bulletTitles.indexOf(t) !== i);
+    assert.deepEqual(duplicated, [], `档案中条目不得重复出现，实际重复: ${duplicated.join(', ')}`);
 
     // 验证 maxChars 截断与提示行为
     const truncated = indexer.getBriefSummary(100);
