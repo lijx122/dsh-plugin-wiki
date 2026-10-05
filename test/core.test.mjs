@@ -34,6 +34,8 @@ tags: [agent, core]
 DeepSeek Harness 智能体核心。
 
 依赖底层微内核 [[Cordis|微内核]] 以及 [[AuthGuard]]。
+
+本机资金区间 1000~2000 元，调用 \`wiki_write\` 记录。
 `;
 
   const { frontmatter, body } = parseFrontmatter(raw);
@@ -51,6 +53,8 @@ DeepSeek Harness 智能体核心。
   assert.equal(doc.title, 'DSH 智能体');
   assert.equal(doc.type, 'project');
   assert.ok(doc.summary.includes('DeepSeek Harness'));
+  assert.ok(doc.summary.includes('1000~2000'), '摘要不得抹掉 ~ 导致 1000~2000 变成 10002000');
+  assert.ok(doc.summary.includes('`wiki_write`'), '摘要不得抹掉反引号包裹的标识符');
 });
 
 test('2.1 Parser: parseHeadings (跳过代码块与Frontmatter) 与 extractSection (定向章节提取)', () => {
@@ -383,7 +387,8 @@ type: "general"
 ---
 # 用户画像
 全栈技术实践者，自学冲刺中，偏好本地离线与高密度认知交付。
-日常通过 \`wiki_write\` 记录，路径为 ~/.dsh/wiki 与 [[决策档案|旧决策页]]。
+
+第二段不应出现在档案里（关于你只取首段）。
 `,
       'utf8'
     );
@@ -439,7 +444,7 @@ type: "agent"
 ---
 # 跨会话交接
 ## 本次交接
-上次会话已完成 ProposalStore 扩展，本次接续完成记忆注入协议重写。
+上次会话已完成 ProposalStore 扩展，本次接续完成记忆注入协议重写，日常通过 \`wiki_write\` 记录，路径为 ~/.dsh/wiki 与 [[决策档案|旧决策页]]。
 `,
       'utf8'
     );
@@ -471,6 +476,7 @@ type: "agent"
     assert.ok(!summary.includes('用户画像 全栈技术实践者'), 'Self 标题行不应粘连进正文');
     assert.ok(!summary.includes('跨会话交接 上次会话'), '记忆条目标题行不应粘连进正文');
     assert.ok(!summary.includes('本次交接 上次会话'), 'H2 标题行同样不得粘连进正文');
+    assert.ok(!summary.includes('第二段不应出现在档案里'), '「关于你」只取首段，不得拼接后续段落');
 
     // 修复断言 C：正文中的反引号标识符、~ 路径与双链不得被破坏
     assert.ok(summary.includes('`wiki_write`'), '代码标识符应保持原样（不得被抹成 wikiwrite）');
@@ -533,6 +539,29 @@ updated_at: "2026-10-05"
     assert.ok(!summary.includes('**活跃主题**：'), '无 Topics/ 时不得出现「活跃主题」标题（标签错位）');
     assert.ok(summary.includes('**最近变更**：'), '无 Topics/ 时最近变更应独立成段');
     assert.ok(summary.includes('旧项目'), '应列出旧库中最近变更的词条');
+
+    // 归档区的历史留档不得出现在当前认知档案里
+    await mkdir(join(tmp, 'Archive'), { recursive: true });
+    await writeFile(
+      join(tmp, 'Archive', '已废弃条目.md'),
+      `---
+title: "已废弃条目"
+type: "general"
+updated_at: "2026-10-06"
+---
+# 已废弃
+这是归档历史，不应进入档案。
+`,
+      'utf8'
+    );
+    const scanner2 = new WikiScanner(tmp);
+    const docs2 = await scanner2.scan();
+    const graph2 = new WikiGraph();
+    graph2.build(docs2);
+    const indexer2 = new WikiIndexer(graph2);
+    indexer2.build(docs2);
+    const summary2 = indexer2.getBriefSummary(2500);
+    assert.ok(!summary2.includes('已废弃条目'), 'Archive/ 下的归档词条不得进入记忆档案');
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }

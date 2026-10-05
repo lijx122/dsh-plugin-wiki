@@ -118,10 +118,13 @@ export class WikiIndexer {
    * 4. 交接记忆 (Agent/记忆.md)
    */
   getBriefSummary(maxChars = 2500): string {
-    const docs = Array.from(this.indexedDocs.values()).map((i) => i.doc);
-    if (docs.length === 0) {
+    const allDocs = Array.from(this.indexedDocs.values()).map((i) => i.doc);
+    if (allDocs.length === 0) {
       return '';
     }
+
+    // 归档区属历史留档，不参与当前认知档案（避免把废弃条目当成近期动态）
+    const docs = allDocs.filter((d) => !isArchivedDoc(d));
 
     const lines: string[] = [];
     lines.push('### Agent 记忆档案');
@@ -133,7 +136,7 @@ export class WikiIndexer {
     });
     if (selfDoc) {
       lines.push('**关于你**：');
-      const text = extractBodyText(selfDoc.rawContent, selfDoc.summary);
+      const text = extractLeadParagraph(selfDoc.rawContent, selfDoc.summary);
       lines.push(text.slice(0, 200));
     }
 
@@ -228,8 +231,38 @@ function extractBodyText(rawContent: string, fallback: string): string {
   return body || fallback;
 }
 
-function isInboxDoc(doc: WikiDoc): boolean {
-  const normalized = doc.relPath.replace(/\\/g, '/');
+/**
+ * 提取词条首段正文（剥离 Frontmatter 与标题行），用于「关于你」这类需要紧凑摘要的段落
+ */
+function extractLeadParagraph(rawContent: string, fallback: string): string {
+  const lines = rawContent
+    .replace(/^---[\s\S]*?---\r?\n?/, '')
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*#{1,6}\s/.test(line));
+
+  const collected: string[] = [];
+  for (const line of lines) {
+    if (!line.trim()) {
+      if (collected.length > 0) break;
+      continue;
+    }
+    collected.push(line.replace(/^\s*[-*+]\s+/, ''));
+  }
+
+  const body = collected
+    .join(' ')
+    .replace(/\*\*/g, '')
+    .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_m, a, b) => b || a)
+    .replace(/\s+/g, ' ')
+    .trim();
+  return body || fallback;
+}
+
+function isArchivedDoc(doc: WikiDoc): boolean {  const normalized = doc.relPath.replace(/\\/g, '/').toLowerCase();
+  return normalized.startsWith('archive/');
+}
+
+function isInboxDoc(doc: WikiDoc): boolean {  const normalized = doc.relPath.replace(/\\/g, '/');
   return normalized.startsWith('待整理/') || normalized.toLowerCase().startsWith('inbox/');
 }
 

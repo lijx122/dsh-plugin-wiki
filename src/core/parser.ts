@@ -261,8 +261,9 @@ function cleanMarkdownFormatting(md: string): string {
   return md
     .replace(/\[\[([^|\]]+)(?:\|[^\]]+)?\]\]/g, '$1') // 移除双链语法保留文字
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')           // 移除普通链接语法
-    .replace(/[*_`~#]/g, '')                           // 移除标记符号
-    .replace(/\s+/g, ' ')
+    .replace(/\*\*/g, '')                              // 仅移除成对强调标记
+    .replace(/^\s*[-*+]\s+/gm, '')                     // 移除行首列表符号
+    .replace(/\s+/g, ' ')                              // 保留 ` 与 ~ 等有语义字符（避免 1000~2000 被抹成 10002000）
     .trim();
 }
 
