@@ -34,3 +34,16 @@ export declare function extractSummary(markdown: string, maxLength?: number): st
  * 解析完整 Markdown 文档为 WikiDoc 结构
  */
 export declare function parseWikiDoc(relPath: string, absPath: string, content: string, mtimeMs: number, sizeBytes: number): WikiDoc;
+/**
+ * 根据相对路径的一级目录推导词条类型 (type)
+ * 如 Topics -> topic、待整理 -> inbox、Agent -> agent，推导不出来用 general
+ */
+export declare function inferDocTypeFromPath(relPath: string): string;
+/**
+ * 就地替换 Markdown 文档中指定小节的正文
+ * 若找到对应小节，替换从该标题下一行开始、到下一个同级或更高级标题之前的内容
+ */
+export declare function replaceSection(markdown: string, sectionTitle: string, newContent: string): {
+    replaced: boolean;
+    content: string;
+};

@@ -39,7 +39,7 @@ export async function apply(ctx: Context, config: WikiConfig): Promise<void> {
 
   // 5. 接入 DSH Agent 工具集合
   ctx.inject(['tools'], (toolCtx: any) => {
-    const tools = createWikiTools(wikiRoot, scanner, indexer, graph, proposalStore);
+    const tools = createWikiTools(wikiRoot, scanner, indexer, graph, proposalStore, config.requireApproval ?? false);
     for (const tool of tools) {
       toolCtx.tools.register(tool);
     }

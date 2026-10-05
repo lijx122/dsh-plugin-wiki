@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readFile, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { resolveWikiPath } from '../lib/core/config.js';
-import { parseFrontmatter, extractWikiLinks, parseWikiDoc, parseHeadings, extractSection, formatMtime } from '../lib/core/parser.js';
+import { parseFrontmatter, extractWikiLinks, parseWikiDoc, parseHeadings, extractSection, formatMtime, replaceSection, inferDocTypeFromPath } from '../lib/core/parser.js';
 import { WikiScanner } from '../lib/core/scanner.js';
 import { WikiGraph } from '../lib/core/graph.js';
 import { WikiIndexer } from '../lib/core/indexer.js';
@@ -267,6 +267,207 @@ type: decision
     // 确保备份目录存在且有文件
     const files = await readFile(docPath, 'utf8');
     assert.ok(files.length > 0);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('4.1 ProposalStore.writeDirect: 直写落盘、小节就地替换(防重复)、未匹配小节新增、自动备份与新建文件 Frontmatter 补齐', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'wiki-direct-test-'));
+  try {
+    const store = new ProposalStore(tmp);
+    await store.init();
+
+    // 1. 新建文件：验证自动补齐 frontmatter (推导 type 为 inbox，status active，补齐 updated 与 title)
+    const newRes = await store.writeDirect({
+      targetRelPath: '待整理/软件构想.md',
+      content: '基于 DSH 的无头轻量记忆流。',
+    });
+    assert.equal(newRes.ok, true);
+    assert.equal(newRes.applied, true);
+
+    const createdDoc = await readFile(join(tmp, '待整理', '软件构想.md'), 'utf8');
+    assert.ok(createdDoc.includes('title: "软件构想"'));
+    assert.ok(createdDoc.includes('type: "inbox"'));
+    assert.ok(createdDoc.includes('status: "active"'));
+    assert.ok(createdDoc.includes('updated: "'));
+    assert.ok(createdDoc.includes('# 软件构想'));
+    assert.ok(createdDoc.includes('基于 DSH 的无头轻量记忆流。'));
+
+    // 2. 准备已存在文件用于就地替换测试
+    const topicPath = join(tmp, 'Topics', 'DSH.md');
+    await mkdir(join(tmp, 'Topics'), { recursive: true });
+    const initialTopic = `---
+title: "DSH 智能体"
+type: "topic"
+status: "active"
+updated: "2026-09-01"
+---
+
+# DSH 智能体
+
+## 核心定位
+这是旧的核心定位正文，应该在后续被就地替换掉。
+
+## 关联模块
+- Core
+- Tools
+`;
+    await writeFile(topicPath, initialTopic, 'utf8');
+
+    // 3. 执行 section 就地替换
+    const replaceRes = await store.writeDirect({
+      targetRelPath: 'Topics/DSH.md',
+      section: '核心定位',
+      content: '这是全新的核心定位：长期自治认知记忆系统。',
+      reason: '设计定位升级',
+    });
+    assert.equal(replaceRes.ok, true);
+    assert.equal(replaceRes.applied, true);
+
+    // 4. 验证备份已在 .wiki/backups 下生成
+    const backupDir = join(tmp, '.wiki', 'backups');
+    const backupFiles = await readdir(backupDir);
+    assert.ok(backupFiles.length >= 1);
+    assert.ok(backupFiles.some((f) => f.includes('Topics__DSH.md')));
+
+    // 5. 验证就地替换关键契约：
+    //    - 旧内容消失
+    //    - 新内容出现
+    //    - 标题在全文中只出现一次（关键防重复断言）
+    //    - 后续小节不受破坏
+    const updatedTopic = await readFile(topicPath, 'utf8');
+    assert.ok(!updatedTopic.includes('这是旧的核心定位正文'), '旧内容必须彻底消失');
+    assert.ok(updatedTopic.includes('这是全新的核心定位：长期自治认知记忆系统。'), '新内容必须存在');
+    const headingMatches = updatedTopic.match(/##\s*核心定位/g);
+    assert.equal(headingMatches?.length, 1, '目标小节标题必须只出现一次');
+    assert.ok(updatedTopic.includes('## 关联模块'), '后续小节必须完好保留');
+
+    // 6. 传了 section 但找不到：在文末新增该节
+    const addSecRes = await store.writeDirect({
+      targetRelPath: 'Topics/DSH.md',
+      section: '未闭环事项',
+      content: '- 事项 A\n- 事项 B',
+    });
+    assert.equal(addSecRes.ok, true);
+    const addedSecTopic = await readFile(topicPath, 'utf8');
+    assert.ok(addedSecTopic.includes('## 未闭环事项'));
+    assert.ok(addedSecTopic.includes('- 事项 A'));
+
+    // 7. 未传 section：直接追加到文末
+    const appendRes = await store.writeDirect({
+      targetRelPath: 'Topics/DSH.md',
+      content: '<!-- 文末附录备忘 -->',
+    });
+    assert.equal(appendRes.ok, true);
+    const appendedTopic = await readFile(topicPath, 'utf8');
+    assert.ok(appendedTopic.trim().endsWith('<!-- 文末附录备忘 -->'));
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('4.2 Indexer: getBriefSummary 四段式 Agent 记忆档案 (Self.md / Topics/ / 待整理/ / Agent/记忆.md)', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'wiki-indexer-test-'));
+  try {
+    await mkdir(join(tmp, 'Topics'), { recursive: true });
+    await mkdir(join(tmp, '待整理'), { recursive: true });
+    await mkdir(join(tmp, 'Agent'), { recursive: true });
+
+    // 1. Self.md (关于你)
+    await writeFile(
+      join(tmp, 'Self.md'),
+      `---
+title: "Self"
+type: "general"
+---
+# 用户画像
+全栈技术实践者，自学冲刺中，偏好本地离线与高密度认知交付。
+`,
+      'utf8'
+    );
+
+    // 2. Topics/ (活跃主题)
+    await writeFile(
+      join(tmp, 'Topics', 'DSH.md'),
+      `---
+title: "DSH 工作台"
+type: "topic"
+status: "active"
+updated_at: "2026-10-04"
+---
+# DSH
+本地 AI 工作台与长期记忆载体。
+`,
+      'utf8'
+    );
+
+    await writeFile(
+      join(tmp, 'Topics', 'CLIProxy.md'),
+      `---
+title: "CLIProxy"
+type: "topic"
+status: "active"
+updated_at: "2026-10-05"
+---
+# CLIProxy
+高性能无头代理中间件。
+`,
+      'utf8'
+    );
+
+    // 3. 待整理/ (未整理线索)
+    await writeFile(
+      join(tmp, '待整理', '灵感想法.md'),
+      `---
+title: "灵感想法"
+type: "inbox"
+---
+# 灵感
+关于自动化代码测试生成的小构想。
+`,
+      'utf8'
+    );
+
+    // 4. Agent/记忆.md (交接记忆)
+    await writeFile(
+      join(tmp, 'Agent', '记忆.md'),
+      `---
+title: "Agent 记忆"
+type: "agent"
+---
+# 跨会话交接
+上次会话已完成 ProposalStore 扩展，本次接续完成记忆注入协议重写。
+`,
+      'utf8'
+    );
+
+    const scanner = new WikiScanner(tmp);
+    const docs = await scanner.scan();
+    const graph = new WikiGraph();
+    graph.build(docs);
+    const indexer = new WikiIndexer(graph);
+    indexer.build(docs);
+
+    const summary = indexer.getBriefSummary(2500);
+
+    // 断言必须包含四段式结构
+    assert.ok(summary.includes('**关于你**：'), '需包含第 1 段：关于你');
+    assert.ok(summary.includes('全栈技术实践者'), '需提取 Self.md 正文');
+
+    assert.ok(summary.includes('**活跃主题**：'), '需包含第 2 段：活跃主题');
+    assert.ok(summary.includes('DSH 工作台'), '需包含 Topics/ 词条');
+    assert.ok(summary.includes('[更新: 2026-10-05]'), '需按 updatedAt 标注更新时间');
+
+    assert.ok(summary.includes('**未整理线索**：'), '需包含第 3 段：未整理线索');
+    assert.ok(summary.includes('灵感想法'), '需列出 待整理/ 下词条');
+
+    assert.ok(summary.includes('**交接记忆**：'), '需包含第 4 段：交接记忆');
+    assert.ok(summary.includes('跨会话交接'), '需提取 Agent/记忆.md 正文');
+
+    // 验证 maxChars 截断与提示行为
+    const truncated = indexer.getBriefSummary(100);
+    assert.ok(truncated.includes('(已截断，请通过 wiki_search 工具查询详细信息)'));
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }

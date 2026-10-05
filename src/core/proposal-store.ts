@@ -1,7 +1,8 @@
 import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, extname, join, resolve } from 'node:path';
 import type { Proposal, ProposalType } from '../types.js';
+import { inferDocTypeFromPath, replaceSection } from './parser.js';
 
 const PROPOSALS_FILE = 'proposals.json';
 const BACKUP_DIR = 'backups';
@@ -25,6 +26,7 @@ export class ProposalStore {
     content: string;
     reason: string;
     confidence: number;
+    replaceSection?: boolean;
   }): Promise<Proposal> {
     const id = this.generateShortId();
     const proposal: Proposal = {
@@ -38,6 +40,7 @@ export class ProposalStore {
       reason: params.reason,
       confidence: Math.max(0, Math.min(1, params.confidence)),
       status: 'pending',
+      ...(params.replaceSection !== undefined ? { replaceSection: params.replaceSection } : {}),
     };
 
     this.proposals.set(id, proposal);
@@ -57,6 +60,97 @@ export class ProposalStore {
 
   listAll(): Proposal[] {
     return Array.from(this.proposals.values()).sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  /**
+   * 备份目标文件至 .wiki/backups
+   */
+  async backupFile(absTarget: string, targetRelPath: string): Promise<string | null> {
+    if (!existsSync(absTarget)) return null;
+    await this.ensureDirs();
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const safeName = targetRelPath.replace(/[\/\\]/g, '__');
+    const backupPath = resolve(this.wikiRoot, META_DIR, BACKUP_DIR, `${ts}_${safeName}`);
+    await copyFile(absTarget, backupPath);
+    return backupPath;
+  }
+
+  /**
+   * 直接写入文件（直写模式：支持自动备份、小节就地替换/追加、新建自动补齐 Frontmatter）
+   */
+  async writeDirect(params: {
+    targetRelPath: string;
+    content: string;
+    section?: string;
+    title?: string;
+    reason?: string;
+  }): Promise<{ ok: boolean; applied: boolean; message: string; targetPath: string }> {
+    const normalizedRoot = resolve(this.wikiRoot);
+    const cleanRel = params.targetRelPath.replace(/\\/g, '/').replace(/^\/+/, '');
+    const absTarget = resolve(normalizedRoot, cleanRel);
+
+    // 路径防穿透检查
+    if (!absTarget.startsWith(normalizedRoot)) {
+      return { ok: false, applied: false, message: '安全阻断：目标路径超出 Wiki 根目录', targetPath: cleanRel };
+    }
+
+    await mkdir(dirname(absTarget), { recursive: true });
+
+    if (existsSync(absTarget)) {
+      // 目标文件已存在：先备份
+      await this.backupFile(absTarget, cleanRel);
+      const existing = await readFile(absTarget, 'utf8');
+      let updated: string;
+
+      if (params.section && params.section.trim()) {
+        const replaceRes = replaceSection(existing, params.section, params.content);
+        if (replaceRes.replaced) {
+          // 传了 section 且该节存在 -> 就地替换该节正文
+          updated = replaceRes.content;
+        } else {
+          // 传了 section 但找不到 -> 在文末新增该节
+          const cleanSec = params.section.replace(/^#+\s*/, '').trim();
+          updated = `${existing.trimEnd()}\n\n## ${cleanSec}\n\n${params.content.trim()}\n`;
+        }
+      } else {
+        // 未传 section -> 追加到文末
+        updated = `${existing.trimEnd()}\n\n${params.content.trim()}\n`;
+      }
+
+      await writeFile(absTarget, updated, 'utf8');
+    } else {
+      // 目标文件不存在：创建并补齐 frontmatter
+      const effectiveTitle = params.title && params.title.trim() ? params.title.trim() : basename(cleanRel, extname(cleanRel));
+      const type = inferDocTypeFromPath(cleanRel);
+      const today = new Date().toISOString().slice(0, 10);
+
+      const frontmatter = [
+        '---',
+        `title: "${effectiveTitle.replace(/"/g, '\\"')}"`,
+        `type: "${type}"`,
+        'status: "active"',
+        `updated: "${today}"`,
+        '---',
+        '',
+      ].join('\n');
+
+      let body = '';
+      if (params.section && params.section.trim()) {
+        const cleanSec = params.section.replace(/^#+\s*/, '').trim();
+        body = `# ${effectiveTitle}\n\n## ${cleanSec}\n\n${params.content.trim()}\n`;
+      } else {
+        body = `# ${effectiveTitle}\n\n${params.content.trim()}\n`;
+      }
+
+      await writeFile(absTarget, `${frontmatter}\n${body}`, 'utf8');
+    }
+
+    return {
+      ok: true,
+      applied: true,
+      message: `已成功写入 \`${cleanRel}\``,
+      targetPath: cleanRel,
+    };
   }
 
   /**
@@ -83,10 +177,7 @@ export class ProposalStore {
 
     // 1. 如果文件已存在，先做备份
     if (existsSync(absTarget)) {
-      const ts = new Date().toISOString().replace(/[:.]/g, '-');
-      const safeName = proposal.targetRelPath.replace(/[\/\\]/g, '__');
-      const backupPath = resolve(normalizedRoot, META_DIR, BACKUP_DIR, `${ts}_${safeName}`);
-      await copyFile(absTarget, backupPath);
+      await this.backupFile(absTarget, proposal.targetRelPath);
     }
 
     // 2. 执行合并写入
@@ -109,7 +200,18 @@ export class ProposalStore {
     } else {
       // 既有文件追加或合并
       const existing = await readFile(absTarget, 'utf8');
-      const updated = this.mergeSection(existing, proposal.section, proposal.content);
+      let updated: string;
+      if (proposal.replaceSection && proposal.section) {
+        const replaceRes = replaceSection(existing, proposal.section, proposal.content);
+        if (replaceRes.replaced) {
+          updated = replaceRes.content;
+        } else {
+          const cleanSec = proposal.section.replace(/^#+\s*/, '').trim();
+          updated = `${existing.trimEnd()}\n\n## ${cleanSec}\n\n${proposal.content.trim()}\n`;
+        }
+      } else {
+        updated = this.mergeSection(existing, proposal.section, proposal.content);
+      }
       await writeFile(absTarget, updated, 'utf8');
     }
 

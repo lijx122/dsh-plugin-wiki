@@ -13,6 +13,9 @@ export const Config: Schema<WikiConfig> = Schema.object({
   autoWatch: Schema.boolean()
     .default(true)
     .description('是否启用文件系统变动监听，自动增量更新内存索引'),
+  requireApproval: Schema.boolean()
+    .default(false)
+    .description('未开启时写入直接落盘；开启时写入进入待审批提案队列'),
 });
 
 /**

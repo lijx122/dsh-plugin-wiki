@@ -77,6 +77,7 @@ export interface Proposal {
     status: ProposalStatus;
     appliedAt?: number;
     rejectedAt?: number;
+    replaceSection?: boolean;
 }
 export interface CacheEntry {
     mtimeMs: number;
@@ -92,4 +93,5 @@ export interface WikiConfig {
     path: string;
     maxContextTokens: number;
     autoWatch: boolean;
+    requireApproval?: boolean;
 }

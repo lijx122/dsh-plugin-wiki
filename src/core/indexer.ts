@@ -111,7 +111,11 @@ export class WikiIndexer {
   }
 
   /**
-   * 生成紧凑的用户长期记忆与上下文摘要（供 System Prompt 动态注入）
+   * 生成紧凑的四段式 Agent 记忆档案（供 System Prompt 动态注入）
+   * 1. 关于你 (Self.md)
+   * 2. 活跃主题 (Topics/ 下条目 + 最近变更)
+   * 3. 未整理线索 (待整理/)
+   * 4. 交接记忆 (Agent/记忆.md)
    */
   getBriefSummary(maxChars = 2500): string {
     const docs = Array.from(this.indexedDocs.values()).map((i) => i.doc);
@@ -119,42 +123,87 @@ export class WikiIndexer {
       return '';
     }
 
-    const projects = docs.filter((d) => d.type === 'project');
-    const preferences = docs.filter((d) => d.type === 'preference');
-    const decisions = docs.filter((d) => d.type === 'decision');
-    const persons = docs.filter((d) => d.type === 'person');
-
     const lines: string[] = [];
     lines.push('### 个人长期 Wiki 认知档案');
 
-    if (projects.length > 0) {
-      lines.push('**重点项目与技术栈**：');
-      for (const p of projects.slice(0, 6)) {
-        const links = this.graph.getForwardLinks(p.relPath);
-        const linkStr = links.length > 0 ? ` (关联: ${links.map((l) => l.split('/').pop()?.replace('.md', '')).join(', ')})` : '';
-        lines.push(`- **${p.title}** [${p.status}]: ${p.summary.slice(0, 70)}${linkStr}`);
+    // 1. 关于你：Self.md（若不存在则跳过）
+    const selfDoc = docs.find((d) => {
+      const lower = d.relPath.toLowerCase();
+      return lower === 'self.md' || lower.endsWith('/self.md');
+    });
+    if (selfDoc) {
+      lines.push('**关于你**：');
+      const cleanBody = selfDoc.rawContent
+        .replace(/^---[\s\S]*?---\r?\n?/, '')
+        .replace(/[*_`~#]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      const text = cleanBody || selfDoc.summary;
+      lines.push(text.slice(0, 200));
+    }
+
+    // 2. 活跃主题：Topics/ 下条目列表（标题 + status + 摘要片段），外加最近变更若干条（按 updatedAt 倒序，标注 [更新: YYYY-MM-DD]）
+    const topicDocs = docs.filter((d) => d.relPath.toLowerCase().startsWith('topics/'));
+    const sortedByRecent = [...docs].sort((a, b) => {
+      const ua = a.updatedAt || '';
+      const ub = b.updatedAt || '';
+      if (ua && ub && ua !== ub) return ub.localeCompare(ua);
+      return (b.mtimeMs || 0) - (a.mtimeMs || 0);
+    });
+
+    const activeLines: string[] = [];
+    if (topicDocs.length > 0) {
+      for (const t of topicDocs.slice(0, 6)) {
+        const excerpt = t.summary ? t.summary.slice(0, 60) : t.rawContent.slice(0, 60).replace(/\s+/g, ' ');
+        activeLines.push(`- **${t.title}** [${t.status}]: ${excerpt}`);
       }
     }
 
-    if (preferences.length > 0) {
-      lines.push('**核心偏好与决策准则**：');
-      for (const pref of preferences.slice(0, 5)) {
-        lines.push(`- **${pref.title}**: ${pref.summary.slice(0, 80)}`);
+    // 最近变更若干条（选取最近 3-4 条，标注 [更新: YYYY-MM-DD]）
+    const recentCandidates = sortedByRecent.slice(0, 4);
+    if (recentCandidates.length > 0) {
+      if (topicDocs.length > 0) {
+        activeLines.push('最近变更：');
+      }
+      for (const r of recentCandidates) {
+        const dateStr = r.updatedAt ? ` [更新: ${r.updatedAt}]` : '';
+        const excerpt = r.summary ? r.summary.slice(0, 50) : r.rawContent.slice(0, 50).replace(/\s+/g, ' ');
+        activeLines.push(`- **${r.title}**${dateStr}: ${excerpt}`);
       }
     }
 
-    if (decisions.length > 0) {
-      lines.push('**重要技术决策**：');
-      for (const d of decisions.slice(0, 4)) {
-        lines.push(`- **${d.title}**: ${d.summary.slice(0, 70)}`);
+    if (activeLines.length > 0) {
+      lines.push('**活跃主题**：');
+      lines.push(...activeLines);
+    }
+
+    // 3. 未整理线索：待整理/ 下条目清单（仅标题 + 摘要片段，控制体积）
+    const inboxDocs = docs.filter((d) => {
+      const normalized = d.relPath.replace(/\\/g, '/');
+      return normalized.startsWith('待整理/') || normalized.toLowerCase().startsWith('inbox/');
+    });
+    if (inboxDocs.length > 0) {
+      lines.push('**未整理线索**：');
+      for (const item of inboxDocs.slice(0, 5)) {
+        const excerpt = item.summary ? item.summary.slice(0, 50) : item.rawContent.slice(0, 50).replace(/\s+/g, ' ');
+        lines.push(`- **${item.title}**: ${excerpt}`);
       }
     }
 
-    if (persons.length > 0) {
-      lines.push('**关键人际网络与组织**：');
-      for (const per of persons.slice(0, 3)) {
-        lines.push(`- **${per.title}**: ${per.summary.slice(0, 60)}`);
-      }
+    // 4. 交接记忆：Agent/记忆.md 的前若干字（跨会话交接点、未闭环事项）
+    const memoryDoc = docs.find((d) => {
+      const normalized = d.relPath.replace(/\\/g, '/');
+      return normalized === 'Agent/记忆.md' || normalized.toLowerCase() === 'agent/记忆.md';
+    });
+    if (memoryDoc) {
+      lines.push('**交接记忆**：');
+      const cleanBody = memoryDoc.rawContent
+        .replace(/^---[\s\S]*?---\r?\n?/, '')
+        .replace(/[*_`~#]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      const text = cleanBody || memoryDoc.summary;
+      lines.push(text.slice(0, 200));
     }
 
     const full = lines.join('\n');

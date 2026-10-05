@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -74,11 +74,12 @@ Alpha 项目说明，依赖 [[Beta]]。
       autoWatch: false,
     });
 
-    // 1. 验证 Tools 注册
+    // 1. 验证 Tools 注册 (收敛为 3 个，移除 propose/create)
     assert.ok(registeredTools.has('wiki_search'));
     assert.ok(registeredTools.has('wiki_read'));
-    assert.ok(registeredTools.has('wiki_propose'));
-    assert.ok(registeredTools.has('wiki_create'));
+    assert.ok(registeredTools.has('wiki_write'));
+    assert.equal(registeredTools.has('wiki_propose'), false);
+    assert.equal(registeredTools.has('wiki_create'), false);
 
     // 2. 验证 Commands 注册
     assert.ok(registeredCommands.has('wiki'));
@@ -92,45 +93,28 @@ Alpha 项目说明，依赖 [[Beta]]。
     assert.equal(searchResult.count, 1);
     assert.equal(searchResult.results[0].title, 'Alpha');
 
-    // 5. 执行 wiki_propose 提交修改建议
-    const proposeTool = registeredTools.get('wiki_propose');
-    const proposeRes = await proposeTool.execute({
+    // 5. 执行 wiki_write 直写落盘
+    const writeTool = registeredTools.get('wiki_write');
+    const writeRes = await writeTool.execute({
       targetRelPath: 'Project/Alpha.md',
-      title: 'Alpha 新增决策',
-      type: 'record_decision',
-      section: '决策记录',
       content: '- 决定采用单机自宿主部署',
+      section: '决策记录',
       reason: '对话中用户明确指定',
-      confidence: 0.95,
     });
-    assert.equal(proposeRes.ok, true);
-    assert.ok(proposeRes.proposalId.startsWith('prop-'));
+    assert.equal(writeRes.ok, true);
+    assert.equal(writeRes.applied, true);
+    assert.ok(writeRes.message.includes('已直接更新并落盘'));
 
-    // 6. 执行 /wiki list 命令
+    // 6. 执行 /wiki recent 命令
     const wikiCommand = registeredCommands.get('wiki');
-    const listRes = await wikiCommand.handler({}, { rawInput: 'list' });
-    assert.equal(listRes.kind, 'success');
-    assert.ok(listRes.text.includes(proposeRes.proposalId));
+    const recentRes = await wikiCommand.handler({}, { rawInput: 'recent 5' });
+    assert.equal(recentRes.kind, 'success');
+    assert.ok(recentRes.text.includes('Alpha'));
 
-    // 7. 执行 /wiki approve 命令
-    const approveRes = await wikiCommand.handler({}, { rawInput: `approve ${proposeRes.proposalId}` });
-    assert.equal(approveRes.kind, 'success');
-    assert.ok(approveRes.text.includes('已批准'));
-
-    // 7.1 测试 autoApprove: true 静默直接落盘
-    const autoProposeRes = await proposeTool.execute({
-      targetRelPath: 'Project/Alpha.md',
-      title: 'Alpha 架构决策',
-      type: 'record_decision',
-      section: '架构决策',
-      content: '- 用户指示直接落盘',
-      reason: '用户明确指示',
-      confidence: 1.0,
-      autoApprove: true,
-    });
-    assert.equal(autoProposeRes.ok, true);
-    assert.equal(autoProposeRes.applied, true);
-    assert.ok(autoProposeRes.message.includes('已直接更新并落盘'));
+    // 7. 执行 /wiki status 命令
+    const statusRes = await wikiCommand.handler({}, { rawInput: 'status' });
+    assert.equal(statusRes.kind, 'success');
+    assert.ok(statusRes.text.includes('Wiki 个人知识库状态'));
 
     // 8. 重新通过 wiki_read 验证文件已成功写入新内容
     const readTool = registeredTools.get('wiki_read');
@@ -138,6 +122,22 @@ Alpha 项目说明，依赖 [[Beta]]。
     assert.equal(readRes.found, true);
     assert.ok(readRes.content.includes('决定采用单机自宿主部署'));
     assert.ok(readRes.content.includes('## 决策记录'));
+
+    // 8.1 验证 wiki_write 小节就地替换 (旧内容消失，新内容出现，标题只出现一次)
+    const replaceRes = await writeTool.execute({
+      targetRelPath: 'Project/Alpha.md',
+      content: '- 替换后的全新决策：完全本地自治无头运行',
+      section: '决策记录',
+      reason: '认知就地纠错',
+    });
+    assert.equal(replaceRes.ok, true);
+    assert.equal(replaceRes.applied, true);
+
+    const readReplaceRes = await readTool.execute({ path: 'Project/Alpha.md' });
+    assert.ok(readReplaceRes.content.includes('完全本地自治无头运行'));
+    assert.ok(!readReplaceRes.content.includes('单机自宿主部署'), '就地替换后旧决策必须消失');
+    const headingOccurrences = readReplaceRes.content.match(/##\s*决策记录/g);
+    assert.equal(headingOccurrences?.length, 1, '小节标题只出现一次');
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
@@ -301,6 +301,131 @@ type: project
     assert.equal(searchRes2.count, 1);
     const item2 = searchRes2.results[0];
     assert.match(item2.updatedAt, /^\d{4}-\d{2}-\d{2}$/);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('7. 端到端模拟：requireApproval: true 模式 (提案、list/diff/approve/reject) 与越界路径安全拦截', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'wiki-approval-e2e-'));
+  try {
+    const topicDir = join(tmp, 'Topics');
+    await mkdir(topicDir, { recursive: true });
+    await writeFile(
+      join(topicDir, 'System.md'),
+      `---
+title: System
+type: topic
+status: active
+---
+# System
+
+## 决策记录
+旧记录：单体架构。
+`,
+      'utf8'
+    );
+
+    const registeredTools = new Map();
+    const registeredCommands = new Map();
+    let injectedContextText = '';
+
+    const mockCtx = {
+      inject(deps, callback) {
+        if (deps.includes('tools')) {
+          callback({
+            tools: {
+              register(tool) {
+                registeredTools.set(tool.name, tool);
+              },
+            },
+          });
+        }
+        if (deps.includes('commands')) {
+          callback({
+            commands: {
+              register(cmd) {
+                registeredCommands.set(cmd.name, cmd);
+              },
+            },
+          });
+        }
+        if (deps.includes('systemPrompt')) {
+          callback({
+            systemPrompt: {
+              context(spec) {
+                injectedContextText = spec.text();
+              },
+            },
+          });
+        }
+      },
+      logger() {
+        return { warn() {}, info() {} };
+      },
+      effect() {
+        return () => {};
+      },
+    };
+
+    // 启用 requireApproval: true 模式
+    await apply(mockCtx, {
+      path: tmp,
+      maxContextTokens: 1500,
+      autoWatch: false,
+      requireApproval: true,
+    });
+
+    const writeTool = registeredTools.get('wiki_write');
+    const wikiCommand = registeredCommands.get('wiki');
+    const readTool = registeredTools.get('wiki_read');
+
+    // 1. 越界路径安全拦截
+    const evilRes = await writeTool.execute({
+      targetRelPath: '../../evil.md',
+      content: 'malicious',
+    });
+    assert.equal(evilRes.ok, false);
+    assert.equal(evilRes.applied, false);
+    assert.ok(evilRes.message.includes('安全阻断'));
+
+    // 2. 在 requireApproval: true 下执行 wiki_write
+    const pendingRes = await writeTool.execute({
+      targetRelPath: 'Topics/System.md',
+      title: 'System 更新',
+      section: '决策记录',
+      content: '新记录：插件化微内核架构。',
+      reason: '系统演进重构',
+    });
+    assert.equal(pendingRes.ok, true);
+    assert.equal(pendingRes.applied, false);
+    assert.ok(pendingRes.proposalId.startsWith('prop-'));
+    assert.ok(pendingRes.message.includes('已创建待审核提案'));
+
+    // 3. /wiki list 验证提案存在
+    const listRes = await wikiCommand.handler({}, { rawInput: 'list' });
+    assert.equal(listRes.kind, 'success');
+    assert.ok(listRes.text.includes(pendingRes.proposalId));
+
+    // 4. /wiki diff <id> 验证变更预览
+    const diffRes = await wikiCommand.handler({}, { rawInput: `diff ${pendingRes.proposalId}` });
+    assert.equal(diffRes.kind, 'success');
+    assert.ok(diffRes.text.includes('插件化微内核架构'));
+
+    // 5. /wiki approve <id> 批准提案
+    const approveRes = await wikiCommand.handler({}, { rawInput: `approve ${pendingRes.proposalId}` });
+    assert.equal(approveRes.kind, 'success');
+    assert.ok(approveRes.text.includes('已批准'));
+
+    // 6. 验证写入结果与备份
+    const readRes = await readTool.execute({ path: 'Topics/System.md' });
+    assert.equal(readRes.found, true);
+    assert.ok(readRes.content.includes('新记录：插件化微内核架构。'));
+    assert.ok(!readRes.content.includes('旧记录：单体架构。'), '就地替换后旧记录应消失');
+
+    const backupDir = join(tmp, '.wiki', 'backups');
+    const backupFiles = await readdir(backupDir);
+    assert.ok(backupFiles.length >= 1);
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
