@@ -35,7 +35,7 @@ DeepSeek Harness 智能体核心。
 
 依赖底层微内核 [[Cordis|微内核]] 以及 [[AuthGuard]]。
 
-本机资金区间 1000~2000 元，调用 \`wiki_write\` 记录。
+本机资源区间 1000~2000 单位，调用 \`wiki_write\` 记录。
 `;
 
   const { frontmatter, body } = parseFrontmatter(raw);
@@ -386,7 +386,7 @@ title: "Self"
 type: "general"
 ---
 # 用户画像
-全栈技术实践者，自学冲刺中，偏好本地离线与高密度认知交付。
+全栈技术实践者，长期在高强度自学与项目交付之间切换，偏好本地离线与高密度认知交付。
 
 第二段不应出现在档案里（关于你只取首段）。
 `,
