@@ -383,6 +383,7 @@ type: "general"
 ---
 # 用户画像
 全栈技术实践者，自学冲刺中，偏好本地离线与高密度认知交付。
+日常通过 \`wiki_write\` 记录，路径为 ~/.dsh/wiki 与 [[决策档案|旧决策页]]。
 `,
       'utf8'
     );
@@ -437,6 +438,7 @@ title: "Agent 记忆"
 type: "agent"
 ---
 # 跨会话交接
+## 本次交接
 上次会话已完成 ProposalStore 扩展，本次接续完成记忆注入协议重写。
 `,
       'utf8'
@@ -465,9 +467,15 @@ type: "agent"
     assert.ok(summary.includes('**交接记忆**：'), '需包含第 4 段：交接记忆');
     assert.ok(summary.includes('上次会话已完成 ProposalStore 扩展'), '需提取 Agent/记忆.md 正文段落');
 
-    // 修复断言 A：词条首行一级标题不得被当作正文粘连进档案
-    assert.ok(!summary.includes('用户画像 全栈技术实践者'), 'Self 首行一级标题不应粘连进正文');
-    assert.ok(!summary.includes('跨会话交接 上次会话'), '记忆条目首行一级标题不应粘连进正文');
+    // 修复断言 A：标题行（H1/H2）不得被当作正文粘连进档案
+    assert.ok(!summary.includes('用户画像 全栈技术实践者'), 'Self 标题行不应粘连进正文');
+    assert.ok(!summary.includes('跨会话交接 上次会话'), '记忆条目标题行不应粘连进正文');
+    assert.ok(!summary.includes('本次交接 上次会话'), 'H2 标题行同样不得粘连进正文');
+
+    // 修复断言 C：正文中的反引号标识符、~ 路径与双链不得被破坏
+    assert.ok(summary.includes('`wiki_write`'), '代码标识符应保持原样（不得被抹成 wikiwrite）');
+    assert.ok(summary.includes('~/.dsh/wiki'), '路径中的 ~ 不得被删成 /.dsh/wiki');
+    assert.ok(summary.includes('旧决策页'), '双链应降级为可读文本');
 
     // 修复断言 B：同一条目不得在多个段落重复出现（最近变更只保留净增量）
     const bulletTitles = summary
@@ -480,6 +488,51 @@ type: "agent"
     // 验证 maxChars 截断与提示行为
     const truncated = indexer.getBriefSummary(100);
     assert.ok(truncated.includes('(已截断，请通过 wiki_search 工具查询详细信息)'));
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('4.3 Indexer: 尚无 Topics/ 目录时最近变更不得借用「活跃主题」标题', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'wiki-indexer-legacy-'));
+  try {
+    await writeFile(
+      join(tmp, 'Self.md'),
+      `---
+title: "Self"
+type: "general"
+---
+# 用户
+独立开发者。
+`,
+      'utf8'
+    );
+    // 模拟未迁移的旧库：只有 Project/ 与 Decision/，没有 Topics/
+    await mkdir(join(tmp, 'Project'), { recursive: true });
+    await writeFile(
+      join(tmp, 'Project', '旧项目.md'),
+      `---
+title: "旧项目"
+type: "project"
+updated_at: "2026-10-05"
+---
+# 旧项目
+尚未迁移到 Topics/。
+`,
+      'utf8'
+    );
+
+    const scanner = new WikiScanner(tmp);
+    const docs = await scanner.scan();
+    const graph = new WikiGraph();
+    graph.build(docs);
+    const indexer = new WikiIndexer(graph);
+    indexer.build(docs);
+
+    const summary = indexer.getBriefSummary(2500);
+    assert.ok(!summary.includes('**活跃主题**：'), '无 Topics/ 时不得出现「活跃主题」标题（标签错位）');
+    assert.ok(summary.includes('**最近变更**：'), '无 Topics/ 时最近变更应独立成段');
+    assert.ok(summary.includes('旧项目'), '应列出旧库中最近变更的词条');
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
