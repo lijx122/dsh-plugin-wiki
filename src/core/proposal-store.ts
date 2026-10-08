@@ -154,14 +154,18 @@ export class ProposalStore {
       message += `。⚠️ 提示: ${warning}`;
     }
 
-    return {
+    const ret: { ok: boolean; applied: boolean; message: string; targetPath: string; warning?: string; sizeBytes?: number } = {
       ok: true,
       applied: true,
       message,
       targetPath: cleanRel,
-      warning,
       sizeBytes: s.size,
     };
+    if (warning) {
+      ret.warning = warning;
+    }
+
+    return ret;
   }
 
   /**

@@ -358,14 +358,20 @@ export function createWikiTools(
           message += `\n⚠️ 提示: ${writeRes.warning}`;
         }
 
-        return {
+        const out: Record<string, any> = {
           ok: true,
           applied: true,
           relPath: cleanRel,
           message,
-          warning: writeRes.warning,
-          sizeBytes: writeRes.sizeBytes,
         };
+        if (writeRes.warning) {
+          out.warning = writeRes.warning;
+        }
+        if (typeof writeRes.sizeBytes === 'number') {
+          out.sizeBytes = writeRes.sizeBytes;
+        }
+
+        return out as any;
       },
     })
   );
