@@ -278,6 +278,8 @@ export function createWikiTools(
             proposalId: { type: 'string' },
             relPath: { type: 'string' },
             message: { type: 'string' },
+            warning: { type: 'string' },
+            sizeBytes: { type: 'integer' },
           },
         },
         render: (_args, value): ContentBlock[] => [{ type: 'text', text: value.message ?? '' }],
@@ -351,11 +353,18 @@ export function createWikiTools(
           // 容错降级
         }
 
+        let message = `已直接更新并落盘到 \`${cleanRel}\`。`;
+        if (writeRes.warning) {
+          message += `\n⚠️ 提示: ${writeRes.warning}`;
+        }
+
         return {
           ok: true,
           applied: true,
           relPath: cleanRel,
-          message: `已直接更新并落盘到 \`${cleanRel}\`。`,
+          message,
+          warning: writeRes.warning,
+          sizeBytes: writeRes.sizeBytes,
         };
       },
     })

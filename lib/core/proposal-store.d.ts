@@ -35,6 +35,8 @@ export declare class ProposalStore {
         applied: boolean;
         message: string;
         targetPath: string;
+        warning?: string;
+        sizeBytes?: number;
     }>;
     /**
      * 批准并应用提案（执行安全合并与历史自动备份）

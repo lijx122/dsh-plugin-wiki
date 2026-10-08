@@ -366,6 +366,20 @@ updated: "2026-09-01"
     assert.equal(appendRes.ok, true);
     const appendedTopic = await readFile(topicPath, 'utf8');
     assert.ok(appendedTopic.trim().endsWith('<!-- 文末附录备忘 -->'));
+
+    // 8. 写入超标软提醒：当文件超过 4.5KB (4500 字节) 时触发 warning，但不阻断写入
+    const largeContent = '超长补充正文段落。'.repeat(300);
+    const overLimitRes = await store.writeDirect({
+      targetRelPath: 'Topics/DSH.md',
+      content: largeContent,
+      section: '超长记录',
+    });
+    assert.equal(overLimitRes.ok, true);
+    assert.equal(overLimitRes.applied, true);
+    assert.ok(overLimitRes.sizeBytes > 4500);
+    assert.ok(overLimitRes.warning);
+    assert.ok(overLimitRes.warning.includes('超出 4.5KB 软上限'));
+    assert.ok(overLimitRes.message.includes('超出 4.5KB 软上限'));
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }

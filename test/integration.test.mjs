@@ -138,6 +138,19 @@ Alpha 项目说明，依赖 [[Beta]]。
     assert.ok(!readReplaceRes.content.includes('单机自宿主部署'), '就地替换后旧决策必须消失');
     const headingOccurrences = readReplaceRes.content.match(/##\s*决策记录/g);
     assert.equal(headingOccurrences?.length, 1, '小节标题只出现一次');
+
+    // 8.2 验证 wiki_write 写入超标时透传 warning
+    const largeRes = await writeTool.execute({
+      targetRelPath: 'Project/Alpha.md',
+      content: '超长正文内容。'.repeat(350),
+      section: '历史详尽流水',
+    });
+    assert.equal(largeRes.ok, true);
+    assert.equal(largeRes.applied, true);
+    assert.ok(largeRes.warning);
+    assert.ok(largeRes.warning.includes('超出 4.5KB 软上限'));
+    assert.ok(largeRes.message.includes('超出 4.5KB 软上限'));
+    assert.ok(largeRes.sizeBytes > 4500);
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
