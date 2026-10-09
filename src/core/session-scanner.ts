@@ -106,6 +106,8 @@ export function cleanUserText(raw: string): string {
   cleaned = cleaned.replace(/### (?:个人长期 Wiki 认知档案|Agent 记忆档案)[\s\S]*/gi, '');
   // 6. 去除 skill 列表
   cleaned = cleaned.replace(/<available_skills>[\s\S]*?<\/available_skills>/gi, '');
+  // 7. 去除 DSH 轮次时间采样元数据 (Time sampled while preparing turn...)
+  cleaned = cleaned.replace(/Time sampled while preparing turn[\s\S]*?(?:Elapsed since[^\n]*\n?|$)/gi, '');
 
   return cleaned.trim();
 }
@@ -193,14 +195,22 @@ export class SessionScanner {
 
       for (const sDir of sessionDirs) {
         const sessionPath = join(wsPath, sDir);
-        const zstdPath = join(sessionPath, 'session.v3.jsonl.zstd');
+        const v4Zstd = join(sessionPath, 'session.v4.jsonl.zstd');
+        const v3Zstd = join(sessionPath, 'session.v3.jsonl.zstd');
+        const plainZstd = join(sessionPath, 'session.jsonl.zstd');
         const jsonlPath = join(sessionPath, 'session.jsonl');
 
         let targetFile: string | null = null;
         let isZstd = false;
 
-        if (existsSync(zstdPath)) {
-          targetFile = zstdPath;
+        if (existsSync(v4Zstd)) {
+          targetFile = v4Zstd;
+          isZstd = true;
+        } else if (existsSync(v3Zstd)) {
+          targetFile = v3Zstd;
+          isZstd = true;
+        } else if (existsSync(plainZstd)) {
+          targetFile = plainZstd;
           isZstd = true;
         } else if (existsSync(jsonlPath)) {
           targetFile = jsonlPath;
