@@ -8,6 +8,7 @@ import type { WikiIndexer } from '../core/indexer.js';
 import { extractSection, parseHeadings } from '../core/parser.js';
 import type { ProposalStore } from '../core/proposal-store.js';
 import type { WikiScanner } from '../core/scanner.js';
+import { SessionScanner } from '../core/session-scanner.js';
 import type { ProposalType } from '../types.js';
 
 export function createWikiTools(
@@ -16,9 +17,11 @@ export function createWikiTools(
   indexer: WikiIndexer,
   graph: WikiGraph,
   proposalStore: ProposalStore,
-  options?: { requireApproval?: boolean } | boolean
+  options?: { requireApproval?: boolean } | boolean,
+  sessionScanner?: SessionScanner
 ) {
   const requireApproval = typeof options === 'boolean' ? options : !!options?.requireApproval;
+  const effectiveSessionScanner = sessionScanner || new SessionScanner();
   const tools = [];
 
   // 1. wiki_search
@@ -372,6 +375,77 @@ export function createWikiTools(
         }
 
         return out as any;
+      },
+    })
+  );
+
+  // 4. wiki_recall_session
+  tools.push(
+    defineTool({
+      name: 'wiki_recall_session',
+      description: '定向召回物理历史会话上下文切片（基于 ~/.dsh/sessions 物理日志）。支持按关键词、时间范围与工作区过滤，仅选择性提取 1~2 段高密度问答切片，严禁全量喂入上下文。',
+      parameters: {
+        query: {
+          type: 'string',
+          description: '搜索关键词或短语',
+        },
+        since: {
+          type: 'string',
+          description: '起始时间/日期（如 "2026-10-08" 或时间戳毫秒数）',
+        },
+        until: {
+          type: 'string',
+          description: '截止时间/日期（如 "2026-10-09" 或时间戳毫秒数）',
+        },
+        workspace: {
+          type: 'string',
+          description: '工作区名称过滤（如 "申论系统课" 或 "dsh-plugin-wiki"）',
+        },
+        limit: {
+          type: 'integer',
+          description: '最多返回切片数（默认 2，最大 5）',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            found: { type: 'boolean' },
+            count: { type: 'integer' },
+            snippets: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  sessionId: { type: 'string' },
+                  time: { type: 'string' },
+                  workspace: { type: 'string' },
+                  userText: { type: 'string' },
+                  assistantText: { type: 'string' },
+                },
+              },
+            },
+            text: { type: 'string' },
+          },
+        },
+        render: (_args, value): ContentBlock[] => {
+          if (!value.found || !value.text) {
+            return [{ type: 'text', text: value.text || '未找到符合条件的历史会话切片。' }];
+          }
+          return [{ type: 'text', text: `### 历史会话上下文切片 (${value.count} 段):\n\n${value.text}` }];
+        },
+      },
+      isConcurrencySafe: () => true,
+      async execute(args) {
+        return effectiveSessionScanner.recall({
+          query: args.query,
+          since: args.since,
+          until: args.until,
+          workspace: args.workspace,
+          limit: args.limit,
+        });
       },
     })
   );

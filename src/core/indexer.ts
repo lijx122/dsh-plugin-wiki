@@ -115,7 +115,7 @@ export class WikiIndexer {
    * 1. 关于你 (Self.md)
    * 2. 活跃主题 (Topics/ 下条目 + 最近变更)
    * 3. 未整理线索 (待整理/)
-   * 4. 交接记忆 (Agent/记忆.md)
+   * 4. Agent 记忆总结 (Agent记忆总结.md / 记忆总结.md)
    */
   getBriefSummary(maxChars = 2500): string {
     const allDocs = Array.from(this.indexedDocs.values()).map((i) => i.doc);
@@ -162,7 +162,7 @@ export class WikiIndexer {
 
     // 3. 未整理线索：待整理/ 下条目清单（仅标题 + 摘要片段，控制体积）
     const inboxDocs = docs.filter(isInboxDoc);
-    // 4. 交接记忆：Agent/记忆.md 的正文（跨会话交接点、未闭环事项）
+    // 4. Agent 记忆总结：Agent记忆总结.md 或 记忆总结.md 的正文（高密度交接纪要与项目断点概览）
     const memoryDoc = docs.find(isMemoryDoc);
 
     for (const d of inboxDocs.slice(0, 5)) shownPaths.add(d.relPath);
@@ -201,7 +201,7 @@ export class WikiIndexer {
     }
 
     if (memoryDoc) {
-      lines.push('**交接记忆**：');
+      lines.push('**Agent 记忆总结**：');
       const text = extractBodyText(memoryDoc.rawContent, memoryDoc.summary);
       lines.push(text.slice(0, 200));
     }
@@ -268,7 +268,13 @@ function isInboxDoc(doc: WikiDoc): boolean {  const normalized = doc.relPath.rep
 
 function isMemoryDoc(doc: WikiDoc): boolean {
   const normalized = doc.relPath.replace(/\\/g, '/');
-  return normalized === 'Agent/记忆.md' || normalized.toLowerCase() === 'agent/记忆.md';
+  const lower = normalized.toLowerCase();
+  return (
+    normalized === 'Agent记忆总结.md' ||
+    normalized === '记忆总结.md' ||
+    lower === 'agent记忆总结.md' ||
+    lower === '记忆总结.md'
+  );
 }
 
 /**

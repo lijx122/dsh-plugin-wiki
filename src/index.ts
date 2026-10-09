@@ -4,6 +4,8 @@ import { WikiGraph } from './core/graph.js';
 import { WikiIndexer } from './core/indexer.js';
 import { ProposalStore } from './core/proposal-store.js';
 import { WikiScanner } from './core/scanner.js';
+import { decompressSessionZstd, scanZstdFrames } from './core/session-decoder.js';
+import { SessionScanner } from './core/session-scanner.js';
 import { registerWikiCommands } from './integration/commands.js';
 import { registerContextInjector } from './integration/context-injector.js';
 import { createWikiTools } from './integration/tools.js';
@@ -11,7 +13,7 @@ import type { WikiConfig } from './types.js';
 
 export const name = 'dsh-plugin-wiki';
 export const inject = ['tools', 'systemPrompt', 'commands'];
-export { Config };
+export { Config, SessionScanner, decompressSessionZstd, scanZstdFrames };
 
 export async function apply(ctx: Context, config: WikiConfig): Promise<void> {
   // 1. 严格使用默认的用户主目录 ~/.dsh/wiki，拒绝代码写死绝对路径
@@ -22,6 +24,7 @@ export async function apply(ctx: Context, config: WikiConfig): Promise<void> {
   const indexer = new WikiIndexer(graph);
   const scanner = new WikiScanner(wikiRoot);
   const proposalStore = new ProposalStore(wikiRoot);
+  const sessionScanner = new SessionScanner();
 
   await proposalStore.init();
 
@@ -39,7 +42,15 @@ export async function apply(ctx: Context, config: WikiConfig): Promise<void> {
 
   // 5. 接入 DSH Agent 工具集合
   ctx.inject(['tools'], (toolCtx: any) => {
-    const tools = createWikiTools(wikiRoot, scanner, indexer, graph, proposalStore, config.requireApproval ?? false);
+    const tools = createWikiTools(
+      wikiRoot,
+      scanner,
+      indexer,
+      graph,
+      proposalStore,
+      config.requireApproval ?? false,
+      sessionScanner
+    );
     for (const tool of tools) {
       toolCtx.tools.register(tool);
     }

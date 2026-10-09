@@ -385,12 +385,11 @@ updated: "2026-09-01"
   }
 });
 
-test('4.2 Indexer: getBriefSummary 四段式 Agent 记忆档案 (Self.md / Topics/ / 待整理/ / Agent/记忆.md)', async () => {
+test('4.2 Indexer: getBriefSummary 四段式 Agent 记忆档案 (Self.md / Topics/ / 待整理/ / Agent记忆总结.md)', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'wiki-indexer-test-'));
   try {
     await mkdir(join(tmp, 'Topics'), { recursive: true });
     await mkdir(join(tmp, '待整理'), { recursive: true });
-    await mkdir(join(tmp, 'Agent'), { recursive: true });
 
     // 1. Self.md (关于你)
     await writeFile(
@@ -449,11 +448,11 @@ type: "inbox"
       'utf8'
     );
 
-    // 4. Agent/记忆.md (交接记忆)
+    // 4. Agent记忆总结.md (Agent 记忆总结)
     await writeFile(
-      join(tmp, 'Agent', '记忆.md'),
+      join(tmp, 'Agent记忆总结.md'),
       `---
-title: "Agent 记忆"
+title: "Agent 记忆总结"
 type: "agent"
 ---
 # 跨会话交接
@@ -483,8 +482,8 @@ type: "agent"
     assert.ok(summary.includes('**未整理线索**：'), '需包含第 3 段：未整理线索');
     assert.ok(summary.includes('灵感想法'), '需列出 待整理/ 下词条');
 
-    assert.ok(summary.includes('**交接记忆**：'), '需包含第 4 段：交接记忆');
-    assert.ok(summary.includes('上次会话已完成 ProposalStore 扩展'), '需提取 Agent/记忆.md 正文段落');
+    assert.ok(summary.includes('**Agent 记忆总结**：'), '需包含第 4 段：Agent 记忆总结');
+    assert.ok(summary.includes('上次会话已完成 ProposalStore 扩展'), '需提取 Agent记忆总结.md 正文段落');
 
     // 修复断言 A：标题行（H1/H2）不得被当作正文粘连进档案
     assert.ok(!summary.includes('用户画像 全栈技术实践者'), 'Self 标题行不应粘连进正文');

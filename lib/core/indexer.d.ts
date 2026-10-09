@@ -15,7 +15,7 @@ export declare class WikiIndexer {
      * 1. 关于你 (Self.md)
      * 2. 活跃主题 (Topics/ 下条目 + 最近变更)
      * 3. 未整理线索 (待整理/)
-     * 4. 交接记忆 (Agent/记忆.md)
+     * 4. Agent 记忆总结 (Agent记忆总结.md / 记忆总结.md)
      */
     getBriefSummary(maxChars?: number): string;
 }

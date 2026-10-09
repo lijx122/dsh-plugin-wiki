@@ -74,10 +74,11 @@ Alpha 项目说明，依赖 [[Beta]]。
       autoWatch: false,
     });
 
-    // 1. 验证 Tools 注册 (收敛为 3 个，移除 propose/create)
+    // 1. 验证 Tools 注册 (四工具面: search, read, write, recall_session)
     assert.ok(registeredTools.has('wiki_search'));
     assert.ok(registeredTools.has('wiki_read'));
     assert.ok(registeredTools.has('wiki_write'));
+    assert.ok(registeredTools.has('wiki_recall_session'));
     assert.equal(registeredTools.has('wiki_propose'), false);
     assert.equal(registeredTools.has('wiki_create'), false);
 
@@ -151,6 +152,13 @@ Alpha 项目说明，依赖 [[Beta]]。
     assert.ok(largeRes.warning.includes('超出 4.5KB 软上限'));
     assert.ok(largeRes.message.includes('超出 4.5KB 软上限'));
     assert.ok(largeRes.sizeBytes > 4500);
+
+    // 8.3 验证 wiki_recall_session 工具可用且支持默认安全调用
+    const recallTool = registeredTools.get('wiki_recall_session');
+    const recallRes = await recallTool.execute({ limit: 2 });
+    assert.ok(typeof recallRes.found === 'boolean');
+    assert.ok(Array.isArray(recallRes.snippets));
+    assert.ok(typeof recallRes.text === 'string');
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
