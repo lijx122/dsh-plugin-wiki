@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile, mkdir, readdir } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, readFile, mkdir, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -159,6 +160,22 @@ Alpha 项目说明，依赖 [[Beta]]。
     assert.ok(typeof recallRes.found === 'boolean');
     assert.ok(Array.isArray(recallRes.snippets));
     assert.ok(typeof recallRes.text === 'string');
+
+    // 8.4 验证 wiki_write 携带 sessionId 时自动建立双向链接关联
+    const linkWriteRes = await writeTool.execute({
+      targetRelPath: 'Topics/Beta.md',
+      content: 'Beta 核心认知',
+      title: 'Beta主题',
+      sessionId: 'session-integration-999',
+    });
+    assert.equal(linkWriteRes.ok, true);
+    assert.ok(linkWriteRes.message.includes('已建立与会话 session-integration-999 的双向链接关联'));
+    const linkFile = join(tmp, '.wiki', 'session-links.json');
+    assert.ok(existsSync(linkFile));
+    const linkJson = JSON.parse(await readFile(linkFile, 'utf8'));
+    assert.ok(linkJson['session-integration-999']);
+    assert.ok(linkJson['session-integration-999'].wikiRefs.includes('Topics/Beta.md'));
+    assert.ok(linkJson['session-integration-999'].topics.includes('Beta主题'));
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }

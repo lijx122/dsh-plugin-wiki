@@ -8,6 +8,7 @@ import type { WikiIndexer } from '../core/indexer.js';
 import { extractSection, parseHeadings } from '../core/parser.js';
 import type { ProposalStore } from '../core/proposal-store.js';
 import type { WikiScanner } from '../core/scanner.js';
+import { SessionLinksIndex } from '../core/session-links.js';
 import { SessionScanner } from '../core/session-scanner.js';
 import type { ProposalType } from '../types.js';
 
@@ -18,10 +19,12 @@ export function createWikiTools(
   graph: WikiGraph,
   proposalStore: ProposalStore,
   options?: { requireApproval?: boolean } | boolean,
-  sessionScanner?: SessionScanner
+  sessionScanner?: SessionScanner,
+  sessionLinks?: SessionLinksIndex
 ) {
   const requireApproval = typeof options === 'boolean' ? options : !!options?.requireApproval;
-  const effectiveSessionScanner = sessionScanner || new SessionScanner();
+  const effectiveSessionLinks = sessionLinks || new SessionLinksIndex(wikiRoot);
+  const effectiveSessionScanner = sessionScanner || new SessionScanner(undefined, effectiveSessionLinks);
   const tools = [];
 
   // 1. wiki_search
@@ -198,7 +201,6 @@ export function createWikiTools(
         // 1. 大纲模式 (headingsOnly: true)
         if (args.headingsOnly === true) {
           const allHeadings = parseHeadings(content);
-          // 仅返回各级标题大纲树（# 至 ####）
           const toc = allHeadings.filter((h) => h.level >= 1 && h.level <= 4);
           return {
             found: true,
@@ -222,7 +224,6 @@ export function createWikiTools(
             };
           }
 
-          // 未找到指定章节，返回明确提示及所有可用大纲
           const allHeadings = parseHeadings(content);
           const outline = allHeadings.length > 0
             ? allHeadings.map((h) => `${'  '.repeat(Math.max(0, h.level - 1))}- ${'#'.repeat(h.level)} ${h.text}`).join('\n')
@@ -270,6 +271,10 @@ export function createWikiTools(
           type: 'string',
           description: '变更原因或依据（可选）',
         },
+        sessionId: {
+          type: 'string',
+          description: '可选，关联产生该认知的会话 ID',
+        },
       },
       output: {
         schema: {
@@ -307,6 +312,16 @@ export function createWikiTools(
           ? args.title.trim()
           : basename(cleanRel, extname(cleanRel));
 
+        // 处理双向链接关联
+        const hasSession = typeof args.sessionId === 'string' && args.sessionId.trim().length > 0;
+        const cleanSessionId = hasSession ? args.sessionId!.trim() : undefined;
+        let topicName: string | undefined;
+        if (args.title && args.title.trim()) {
+          topicName = args.title.trim();
+        } else if (cleanRel.startsWith('Topics/')) {
+          topicName = basename(cleanRel, extname(cleanRel));
+        }
+
         // 1. 若 requireApproval 为 true -> 复用提案流程，返回 applied: false
         if (requireApproval) {
           const proposal = await proposalStore.createProposal({
@@ -320,12 +335,21 @@ export function createWikiTools(
             replaceSection: true,
           });
 
+          if (cleanSessionId) {
+            await effectiveSessionLinks.addLink(cleanSessionId, cleanRel, topicName);
+          }
+
+          let message = `已创建待审核提案 [${proposal.id}]，目标: \`${cleanRel}\`。等待用户通过 \`/wiki approve ${proposal.id}\` 确认写入。`;
+          if (cleanSessionId) {
+            message += `\n🔗 已登记与会话 ${cleanSessionId} 的双向链接关联。`;
+          }
+
           return {
             ok: true,
             applied: false,
             proposalId: proposal.id,
             relPath: cleanRel,
-            message: `已创建待审核提案 [${proposal.id}]，目标: \`${cleanRel}\`。等待用户通过 \`/wiki approve ${proposal.id}\` 确认写入。`,
+            message,
           };
         }
 
@@ -347,6 +371,11 @@ export function createWikiTools(
           };
         }
 
+        // 建立双向链接索引登记
+        if (cleanSessionId) {
+          await effectiveSessionLinks.addLink(cleanSessionId, cleanRel, topicName);
+        }
+
         // 重新扫描更新内存索引与拓扑图
         try {
           const docs = await scanner.scan();
@@ -357,6 +386,9 @@ export function createWikiTools(
         }
 
         let message = `已直接更新并落盘到 \`${cleanRel}\`。`;
+        if (cleanSessionId) {
+          message += `\n🔗 已建立与会话 ${cleanSessionId} 的双向链接关联。`;
+        }
         if (writeRes.warning) {
           message += `\n⚠️ 提示: ${writeRes.warning}`;
         }
@@ -383,8 +415,21 @@ export function createWikiTools(
   tools.push(
     defineTool({
       name: 'wiki_recall_session',
-      description: '定向召回物理历史会话上下文切片（基于 ~/.dsh/sessions 物理日志）。支持按关键词、时间范围与工作区过滤，仅选择性提取 1~2 段高密度问答切片，严禁全量喂入上下文。',
+      description: '定向召回物理历史会话上下文切片（基于 ~/.dsh/sessions 物理日志）。支持按主题、精准会话ID、多关键词、时间范围与工作区过滤，仅选择性提取 1~2 段高密度问答切片，严禁全量喂入上下文。',
       parameters: {
+        topic: {
+          type: 'string',
+          description: '核心主题（如 "DSH工作台"、"公考"、"memory"），传入时优先通过双向链接反查关联会话',
+        },
+        sessionId: {
+          type: 'string',
+          description: '精准会话 ID，直接定位特定会话文件解压抽取',
+        },
+        keywords: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '多个关联词数组（如 ["memory", "上下文", "recall"]），命中任一词即可',
+        },
         query: {
           type: 'string',
           description: '搜索关键词或短语',
@@ -424,6 +469,7 @@ export function createWikiTools(
                   workspace: { type: 'string' },
                   userText: { type: 'string' },
                   assistantText: { type: 'string' },
+                  relatedWiki: { type: 'string' },
                 },
               },
             },
@@ -440,6 +486,9 @@ export function createWikiTools(
       isConcurrencySafe: () => true,
       async execute(args) {
         return effectiveSessionScanner.recall({
+          topic: args.topic,
+          sessionId: args.sessionId,
+          keywords: args.keywords,
           query: args.query,
           since: args.since,
           until: args.until,

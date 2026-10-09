@@ -5,6 +5,7 @@ import { WikiIndexer } from './core/indexer.js';
 import { ProposalStore } from './core/proposal-store.js';
 import { WikiScanner } from './core/scanner.js';
 import { decompressSessionZstd, scanZstdFrames } from './core/session-decoder.js';
+import { SessionLinksIndex } from './core/session-links.js';
 import { SessionScanner } from './core/session-scanner.js';
 import { registerWikiCommands } from './integration/commands.js';
 import { registerContextInjector } from './integration/context-injector.js';
@@ -13,7 +14,7 @@ import type { WikiConfig } from './types.js';
 
 export const name = 'dsh-plugin-wiki';
 export const inject = ['tools', 'systemPrompt', 'commands'];
-export { Config, SessionScanner, decompressSessionZstd, scanZstdFrames };
+export { Config, SessionLinksIndex, SessionScanner, decompressSessionZstd, scanZstdFrames };
 
 export async function apply(ctx: Context, config: WikiConfig): Promise<void> {
   // 1. 严格使用默认的用户主目录 ~/.dsh/wiki，拒绝代码写死绝对路径
@@ -24,7 +25,9 @@ export async function apply(ctx: Context, config: WikiConfig): Promise<void> {
   const indexer = new WikiIndexer(graph);
   const scanner = new WikiScanner(wikiRoot);
   const proposalStore = new ProposalStore(wikiRoot);
-  const sessionScanner = new SessionScanner();
+  const sessionLinks = new SessionLinksIndex(wikiRoot);
+  await sessionLinks.init();
+  const sessionScanner = new SessionScanner(undefined, sessionLinks);
 
   await proposalStore.init();
 
@@ -49,7 +52,8 @@ export async function apply(ctx: Context, config: WikiConfig): Promise<void> {
       graph,
       proposalStore,
       config.requireApproval ?? false,
-      sessionScanner
+      sessionScanner,
+      sessionLinks
     );
     for (const tool of tools) {
       toolCtx.tools.register(tool);

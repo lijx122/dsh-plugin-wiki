@@ -1,9 +1,11 @@
+import type { SessionLinksIndex } from './session-links.js';
 export interface RecallSnippet {
     sessionId: string;
     time: string;
     workspace: string;
     userText: string;
     assistantText: string;
+    relatedWiki?: string;
 }
 export interface RecallResult {
     found: boolean;
@@ -17,6 +19,9 @@ export interface RecallOptions {
     until?: string;
     workspace?: string;
     limit?: number;
+    topic?: string;
+    sessionId?: string;
+    keywords?: string[];
 }
 /**
  * 解码 DSH 目录名中的 ~XXXX 十六进制 Unicode 转义字符
@@ -36,14 +41,15 @@ export declare function formatTimestamp(ms: number): string;
  */
 export declare function cleanUserText(raw: string): string;
 /**
- * 提取助手最终文本回复，忽略工具调用与推理数据
+ * 提取助手最终文本回复，忽略工具调用与推理数据，控制在 300~500 字内
  */
 export declare function cleanAssistantText(rawText: string, maxChars?: number): string;
 export declare class SessionScanner {
     private sessionsRoot;
-    constructor(sessionsRoot?: string);
+    private sessionLinks?;
+    constructor(sessionsRoot?: string, sessionLinks?: SessionLinksIndex);
     /**
-     * 按时间或关键词定向检索历史会话切片（限制 1~5 段紧凑切片）
+     * 按主题、精准会话ID、多关键词或时间范围定向检索历史会话切片（限制 1~5 段紧凑切片）
      */
     recall(options?: RecallOptions): Promise<RecallResult>;
     /**

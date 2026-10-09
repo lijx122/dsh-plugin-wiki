@@ -6,7 +6,15 @@ import { join } from 'node:path';
 import * as zlib from 'node:zlib';
 
 import { scanZstdFrames, decompressSessionZstd } from '../lib/core/session-decoder.js';
-import { SessionScanner, decodeWorkspaceDirName, parseDateBoundary, formatTimestamp, cleanUserText, cleanAssistantText } from '../lib/core/session-scanner.js';
+import { SessionLinksIndex } from '../lib/core/session-links.js';
+import {
+  SessionScanner,
+  decodeWorkspaceDirName,
+  parseDateBoundary,
+  formatTimestamp,
+  cleanUserText,
+  cleanAssistantText,
+} from '../lib/core/session-scanner.js';
 
 test('1. 多帧 Zstandard 流解析与解压缩 (scanZstdFrames & decompressSessionZstd)', async () => {
   const line1 = JSON.stringify({ type: 'session', id: 's1', createdAt: 1700000000000 }) + '\n';
@@ -83,8 +91,9 @@ Current runtime context. This snapshot supersedes earlier runtime-context snapsh
   assert.ok(truncated.endsWith('...'));
 });
 
-test('3. SessionScanner 真实场景模拟：两级剪枝、关键词与时间范围切片检索', async () => {
+test('3. SessionScanner 真实场景模拟：两级剪枝、关键词、工作区与对齐输出格式', async () => {
   const tmpSessions = await mkdtemp(join(tmpdir(), 'dsh-sessions-test-'));
+  const tmpWiki = await mkdtemp(join(tmpdir(), 'dsh-wiki-test-'));
 
   try {
     // 创建测试工作区 1: 申论工作区 (带 Unicode 转义目录)
@@ -168,20 +177,32 @@ test('3. SessionScanner 真实场景模拟：两级剪枝、关键词与时间�
     ];
     await writeFile(join(s2Dir, 'session.jsonl'), s2Lines.join('\n') + '\n', 'utf8');
 
-    const scanner = new SessionScanner(tmpSessions);
+    // 关联双向链接
+    const sessionLinks = new SessionLinksIndex(tmpWiki);
+    await sessionLinks.init();
+    await sessionLinks.addLink('session-exam-001', 'Topics/2026公考.md', '2026公考', '申论系统课');
+
+    const scanner = new SessionScanner(tmpSessions, sessionLinks);
 
     // 1. 关键词检索：检索 "合分比定理"
     const r1 = await scanner.recall({ query: '合分比定理' });
     assert.equal(r1.found, true);
     assert.equal(r1.count, 1);
-    assert.equal(r1.snippets[0].sessionId, 'session-exam-001');
+    assert.equal(r1.snippets[0].sessionId, 'session_exam-001');
     assert.equal(r1.snippets[0].workspace, '申论系统课');
     assert.ok(r1.snippets[0].userText.includes('合分比定理'));
     // 断言助手消息被截断至 400 字左右（非全量注水）
     assert.ok(r1.snippets[0].assistantText.length <= 405);
     assert.ok(r1.snippets[0].assistantText.endsWith('...'));
     assert.ok(!r1.snippets[0].userText.includes('<system-reminder>'), '用户文本不得含有 system-reminder');
-    assert.ok(r1.text.includes('[会话: session-exam-001 | 时间:'));
+
+    // 严格断言用户指定的新输出格式
+    assert.ok(r1.text.includes('来源：'));
+    assert.ok(r1.text.includes('session_exam-001 (工作区: 申论系统课)'));
+    assert.ok(r1.text.includes('关联Wiki: 2026公考, Topics/2026公考.md'));
+    assert.ok(r1.text.includes('上下文：'));
+    assert.ok(r1.text.includes('用户：请帮我整理资料分析合分比定理'));
+    assert.ok(r1.text.includes('回答：已为你整理好资料分析合分比定理'));
 
     // 2. 工作区过滤：仅检索申论工作区
     const r2 = await scanner.recall({ workspace: '申论', limit: 2 });
@@ -203,5 +224,113 @@ test('3. SessionScanner 真实场景模拟：两级剪枝、关键词与时间�
     assert.ok(r4.text.includes('未在历史会话中找到匹配切片'));
   } finally {
     await rm(tmpSessions, { recursive: true, force: true });
+    await rm(tmpWiki, { recursive: true, force: true });
+  }
+});
+
+test('4. 多维检索进阶：通过 topic 反查 sessionId、精准 sessionId 定位与 keywords 多词 OR 匹配', async () => {
+  const tmpSessions = await mkdtemp(join(tmpdir(), 'dsh-sessions-adv-'));
+  const tmpWiki = await mkdtemp(join(tmpdir(), 'dsh-wiki-adv-'));
+
+  try {
+    const wsDir = join(tmpSessions, '--MyWorkspace--');
+    const s1Dir = join(wsDir, 'session-mem-101');
+    const s2Dir = join(wsDir, 'session-exam-202');
+    await mkdir(s1Dir, { recursive: true });
+    await mkdir(s2Dir, { recursive: true });
+
+    const baseTime = new Date('2026-10-09T08:00:00Z').getTime();
+
+    // Session 1: 讨论 memory 机制
+    const s1Lines = [
+      JSON.stringify({ type: 'session', version: 3, id: 'session-mem-101', createdAt: baseTime, cwd: 'D:\\Dev\\Memory' }),
+      JSON.stringify({
+        type: 'user/message',
+        time: baseTime + 1000,
+        data: { content: '设计三层记忆召回优先级与双向链接' },
+      }),
+      JSON.stringify({
+        type: 'assistant/message',
+        time: baseTime + 2000,
+        data: { content: [{ type: 'text', text: '已确立第一层Wiki、第二层关联Session Recall、第三层全局搜索。' }] },
+      }),
+    ];
+    await writeFile(join(s1Dir, 'session.jsonl'), s1Lines.join('\n') + '\n', 'utf8');
+
+    // Session 2: 讨论申论与公考
+    const s2Lines = [
+      JSON.stringify({ type: 'session', version: 3, id: 'session-exam-202', createdAt: baseTime + 10000, cwd: 'D:\\Exam\\Civil' }),
+      JSON.stringify({
+        type: 'user/message',
+        time: baseTime + 11000,
+        data: { content: '公考大作文如何破题？' },
+      }),
+      JSON.stringify({
+        type: 'assistant/message',
+        time: baseTime + 12000,
+        data: { content: [{ type: 'text', text: '抓准给定资料核心总论点，紧扣时代命题与执政为民。' }] },
+      }),
+    ];
+    await writeFile(join(s2Dir, 'session.jsonl'), s2Lines.join('\n') + '\n', 'utf8');
+
+    // 双向链接配置
+    const sessionLinks = new SessionLinksIndex(tmpWiki);
+    await sessionLinks.init();
+    await sessionLinks.addLink('session-mem-101', 'Topics/Memory.md', 'DSH工作台');
+    await sessionLinks.addLink('session-exam-202', 'Topics/2026公考.md', '2026公考');
+
+    const scanner = new SessionScanner(tmpSessions, sessionLinks);
+
+    // 1. 通过 topic 反查：传入 topic: 'DSH工作台'
+    const rTopic = await scanner.recall({ topic: 'DSH工作台' });
+    assert.equal(rTopic.found, true);
+    assert.equal(rTopic.count, 1);
+    assert.equal(rTopic.snippets[0].sessionId, 'session_mem-101');
+    assert.ok(rTopic.snippets[0].userText.includes('三层记忆召回优先级'));
+    assert.ok(rTopic.text.includes('关联Wiki: DSH工作台, Topics/Memory.md'));
+
+    // 2. 模糊 topic 反查：传入 topic: '公考'
+    const rTopicFuzzy = await scanner.recall({ topic: '公考' });
+    assert.equal(rTopicFuzzy.found, true);
+    assert.equal(rTopicFuzzy.count, 1);
+    assert.equal(rTopicFuzzy.snippets[0].sessionId, 'session_exam-202');
+    assert.ok(rTopicFuzzy.snippets[0].userText.includes('大作文如何破题'));
+
+    // 3. 精准 sessionId 定位：传入 sessionId: 'session-mem-101'
+    const rDirectSid = await scanner.recall({ sessionId: 'session-mem-101' });
+    assert.equal(rDirectSid.found, true);
+    assert.equal(rDirectSid.count, 1);
+    assert.equal(rDirectSid.snippets[0].sessionId, 'session_mem-101');
+
+    // 4. 多关键词 keywords 匹配 (OR 关系命中任一词)
+    const rKeywords = await scanner.recall({ keywords: ['不存在的词A', '双向链接', '不存在的词B'] });
+    assert.equal(rKeywords.found, true);
+    assert.equal(rKeywords.count, 1);
+    assert.equal(rKeywords.snippets[0].sessionId, 'session_mem-101');
+
+    // 5. 无双向链接关联时：关联Wiki 输出为「无」
+    const s3Dir = join(wsDir, 'session-plain-303');
+    await mkdir(s3Dir, { recursive: true });
+    const s3Lines = [
+      JSON.stringify({ type: 'session', version: 3, id: 'session-plain-303', createdAt: baseTime + 20000, cwd: 'D:\\Other' }),
+      JSON.stringify({
+        type: 'user/message',
+        time: baseTime + 21000,
+        data: { content: '普通问题咨询' },
+      }),
+      JSON.stringify({
+        type: 'assistant/message',
+        time: baseTime + 22000,
+        data: { content: [{ type: 'text', text: '普通回答完毕。' }] },
+      }),
+    ];
+    await writeFile(join(s3Dir, 'session.jsonl'), s3Lines.join('\n') + '\n', 'utf8');
+
+    const rPlain = await scanner.recall({ sessionId: 'session-plain-303' });
+    assert.equal(rPlain.found, true);
+    assert.ok(rPlain.text.includes('关联Wiki: 无'));
+  } finally {
+    await rm(tmpSessions, { recursive: true, force: true });
+    await rm(tmpWiki, { recursive: true, force: true });
   }
 });

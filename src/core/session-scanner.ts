@@ -3,6 +3,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { decompressSessionZstd } from './session-decoder.js';
+import type { SessionLinksIndex } from './session-links.js';
 
 export interface RecallSnippet {
   sessionId: string;
@@ -10,6 +11,7 @@ export interface RecallSnippet {
   workspace: string;
   userText: string;
   assistantText: string;
+  relatedWiki?: string;
 }
 
 export interface RecallResult {
@@ -25,6 +27,9 @@ export interface RecallOptions {
   until?: string;
   workspace?: string;
   limit?: number;
+  topic?: string;
+  sessionId?: string;
+  keywords?: string[];
 }
 
 interface SessionCandidate {
@@ -113,7 +118,7 @@ export function cleanUserText(raw: string): string {
 }
 
 /**
- * 提取助手最终文本回复，忽略工具调用与推理数据
+ * 提取助手最终文本回复，忽略工具调用与推理数据，控制在 300~500 字内
  */
 export function cleanAssistantText(rawText: string, maxChars = 400): string {
   const trimmed = rawText.trim();
@@ -125,13 +130,15 @@ export function cleanAssistantText(rawText: string, maxChars = 400): string {
 
 export class SessionScanner {
   private sessionsRoot: string;
+  private sessionLinks?: SessionLinksIndex;
 
-  constructor(sessionsRoot?: string) {
+  constructor(sessionsRoot?: string, sessionLinks?: SessionLinksIndex) {
     this.sessionsRoot = sessionsRoot || join(homedir(), '.dsh', 'sessions');
+    this.sessionLinks = sessionLinks;
   }
 
   /**
-   * 按时间或关键词定向检索历史会话切片（限制 1~5 段紧凑切片）
+   * 按主题、精准会话ID、多关键词或时间范围定向检索历史会话切片（限制 1~5 段紧凑切片）
    */
   async recall(options: RecallOptions = {}): Promise<RecallResult> {
     if (!existsSync(this.sessionsRoot)) {
@@ -146,10 +153,64 @@ export class SessionScanner {
     const maxLimit = Math.min(5, Math.max(1, typeof options.limit === 'number' ? options.limit : 2));
     const sinceMs = parseDateBoundary(options.since, false);
     const untilMs = parseDateBoundary(options.until, true);
-    const queryLower = options.query?.trim().toLowerCase();
     const wsFilterLower = options.workspace?.trim().toLowerCase();
 
-    // 1. 第一级剪枝：扫描工作区目录
+    // 构建有效多关键词列表
+    const effectiveKeywords: string[] = [];
+    if (Array.isArray(options.keywords)) {
+      for (const kw of options.keywords) {
+        if (typeof kw === 'string' && kw.trim()) {
+          const kwLower = kw.trim().toLowerCase();
+          if (!effectiveKeywords.includes(kwLower)) {
+            effectiveKeywords.push(kwLower);
+          }
+        }
+      }
+    }
+    if (typeof options.query === 'string' && options.query.trim()) {
+      const qLower = options.query.trim().toLowerCase();
+      if (!effectiveKeywords.includes(qLower)) {
+        effectiveKeywords.push(qLower);
+      }
+    }
+
+    // 确定是否启用精准目标会话过滤
+    const targetSessionIdSet = new Set<string>();
+    let topicMatched = false;
+
+    // 1. 若指定了 sessionId，直接加入目标集
+    if (typeof options.sessionId === 'string' && options.sessionId.trim()) {
+      const rawSid = options.sessionId.trim();
+      const cleanSid = rawSid.replace(/^session[_-]/, '');
+      targetSessionIdSet.add(rawSid);
+      targetSessionIdSet.add(cleanSid);
+      targetSessionIdSet.add(`session_${cleanSid}`);
+      targetSessionIdSet.add(`session-${cleanSid}`);
+    }
+
+    // 2. 若指定了 topic，优先通过 sessionLinks 反查关联 sessionId
+    if (typeof options.topic === 'string' && options.topic.trim()) {
+      const topicStr = options.topic.trim();
+      if (this.sessionLinks) {
+        const foundSids = this.sessionLinks.getSessionsByTopic(topicStr);
+        if (foundSids.length > 0) {
+          topicMatched = true;
+          for (const s of foundSids) {
+            const cleanS = s.replace(/^session[_-]/, '');
+            targetSessionIdSet.add(s);
+            targetSessionIdSet.add(cleanS);
+            targetSessionIdSet.add(`session_${cleanS}`);
+            targetSessionIdSet.add(`session-${cleanS}`);
+          }
+        }
+      }
+      // 若没有反查到，或者没有命中索引，将 topic 作为关键词降级兜底全局搜索
+      if (!topicMatched && effectiveKeywords.length === 0) {
+        effectiveKeywords.push(topicStr.toLowerCase());
+      }
+    }
+
+    // 3. 第一级剪枝：扫描工作区目录
     let wsDirNames: string[] = [];
     try {
       const allEntries = await readdir(this.sessionsRoot, { withFileTypes: true });
@@ -181,7 +242,7 @@ export class SessionScanner {
       };
     }
 
-    // 2. 第二级剪枝：收集会话文件并按 mtimeMs 倒序
+    // 4. 第二级剪枝：收集候选会话文件
     let candidates: SessionCandidate[] = [];
     for (const wsDir of wsDirNames) {
       const wsPath = join(this.sessionsRoot, wsDir);
@@ -194,6 +255,15 @@ export class SessionScanner {
       }
 
       for (const sDir of sessionDirs) {
+        // 如果限定了目标 session 集合，进行快速前置过滤
+        if (targetSessionIdSet.size > 0) {
+          const sDirClean = sDir.replace(/^session[_-]/, '');
+          const matches = targetSessionIdSet.has(sDir) || targetSessionIdSet.has(sDirClean);
+          if (!matches) {
+            continue;
+          }
+        }
+
         const sessionPath = join(wsPath, sDir);
         const v4Zstd = join(sessionPath, 'session.v4.jsonl.zstd');
         const v3Zstd = join(sessionPath, 'session.v3.jsonl.zstd');
@@ -239,14 +309,14 @@ export class SessionScanner {
     // 按最新修改时间倒序排列
     candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
 
-    // 性能风控：若未指定 since 且未指定 workspace，默认扫描最近 120 个活跃会话，防止全盘 800+ 会话无剪枝耗时膨胀
-    if (sinceMs === undefined && !options.workspace) {
+    // 性能风控：若未限定精确目标、未指定 since 且未指定 workspace，默认扫描最近 120 个活跃会话
+    if (targetSessionIdSet.size === 0 && sinceMs === undefined && !options.workspace) {
       candidates = candidates.slice(0, 120);
     }
 
     const snippets: RecallSnippet[] = [];
 
-    // 3. 逐个会话文件抽取有效问答轮次
+    // 5. 逐个会话文件抽取有效问答轮次
     for (const candidate of candidates) {
       if (snippets.length >= maxLimit) break;
 
@@ -300,6 +370,24 @@ export class SessionScanner {
       // 按轮次时间倒序匹配（优先返回会话中更新的提问）
       const reversedTurns = [...turns].reverse();
 
+      // 获取双向链接关联信息
+      let relatedWikiStr = '无';
+      if (this.sessionLinks) {
+        const linkInfo = this.sessionLinks.getWikiRefsBySession(candidate.sessionId);
+        if (linkInfo) {
+          const parts = [...linkInfo.topics, ...linkInfo.wikiRefs];
+          if (parts.length > 0) {
+            relatedWikiStr = parts.join(', ');
+          }
+        }
+      }
+
+      const formattedSessionId = candidate.sessionId.startsWith('session_')
+        ? candidate.sessionId
+        : candidate.sessionId.startsWith('session-')
+          ? 'session_' + candidate.sessionId.slice(8)
+          : `session_${candidate.sessionId}`;
+
       for (const turn of reversedTurns) {
         if (snippets.length >= maxLimit) break;
 
@@ -307,19 +395,21 @@ export class SessionScanner {
         if (sinceMs !== undefined && turn.timeMs < sinceMs) continue;
         if (untilMs !== undefined && turn.timeMs > untilMs) continue;
 
-        // 内容关键词匹配
-        if (queryLower) {
-          const matchUser = turn.userText.toLowerCase().includes(queryLower);
-          const matchAssistant = turn.assistantText.toLowerCase().includes(queryLower);
-          if (!matchUser && !matchAssistant) continue;
+        // 关键词过滤（命中任一词即可）
+        if (effectiveKeywords.length > 0) {
+          const uLower = turn.userText.toLowerCase();
+          const aLower = turn.assistantText.toLowerCase();
+          const matched = effectiveKeywords.some((kw) => uLower.includes(kw) || aLower.includes(kw));
+          if (!matched) continue;
         }
 
         const snippet: RecallSnippet = {
-          sessionId: candidate.sessionId,
+          sessionId: formattedSessionId,
           time: formatTimestamp(turn.timeMs),
           workspace: readableWs,
           userText: turn.userText.length > 500 ? `${turn.userText.slice(0, 500)}...` : turn.userText,
           assistantText: cleanAssistantText(turn.assistantText, 400),
+          relatedWiki: relatedWikiStr,
         };
 
         snippets.push(snippet);
@@ -327,16 +417,33 @@ export class SessionScanner {
     }
 
     if (snippets.length === 0) {
+      let filterDesc = '';
+      if (options.topic) filterDesc += `（主题: "${options.topic}"）`;
+      if (options.sessionId) filterDesc += `（会话: "${options.sessionId}"）`;
+      if (effectiveKeywords.length > 0) filterDesc += `（关键词: [${effectiveKeywords.join(', ')}]）`;
+
       return {
         found: false,
         count: 0,
         snippets: [],
-        text: `未在历史会话中找到匹配切片${queryLower ? `（关键词: "${options.query}"）` : ''}。`,
+        text: `未在历史会话中找到匹配切片${filterDesc}。`,
       };
     }
 
+    // 输出格式严格对齐用户规范：
+    // 来源：<YYYY-MM-DD HH:mm:ss> session_<sessionId> (工作区: <workspace>)
+    // 关联Wiki: <topics/wikiRefs...>
+    // 上下文：
+    // 用户：<用户问题>
+    // 回答：<最终结论 (300~500字截断)>
     const textPieces = snippets.map((s) => {
-      return `[会话: ${s.sessionId} | 时间: ${s.time} | 工作区: ${s.workspace}]\n用户: ${s.userText}\n助手: ${s.assistantText}`;
+      return [
+        `来源：${s.time} ${s.sessionId} (工作区: ${s.workspace})`,
+        `关联Wiki: ${s.relatedWiki || '无'}`,
+        `上下文：`,
+        `用户：${s.userText}`,
+        `回答：${s.assistantText}`,
+      ].join('\n');
     });
 
     return {
