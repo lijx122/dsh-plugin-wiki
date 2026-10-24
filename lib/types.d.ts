@@ -13,6 +13,8 @@ export interface WikiFrontmatter {
     updated_at?: string;
     updatedAt?: string;
     supersedes?: string[] | string;
+    /** 一句话摘要；非空时直接作为 summary，优先于正文自动提取 */
+    brief?: string;
     [key: string]: unknown;
 }
 export interface WikiLink {

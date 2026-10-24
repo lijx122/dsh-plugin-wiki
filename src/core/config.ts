@@ -9,7 +9,7 @@ export const Config: Schema<WikiConfig> = Schema.object({
     .description('Wiki 根目录路径。留空时默认使用当前用户目录下的 ~/.dsh/wiki'),
   maxContextTokens: Schema.number()
     .default(1500)
-    .description('注入 System Prompt 的上下文最大估算 token 限制'),
+    .description('会话首步注入的 Wiki 基线（关于你 + 主题索引）的最大估算 token 限制'),
   autoWatch: Schema.boolean()
     .default(true)
     .description('是否启用文件系统变动监听，自动增量更新内存索引'),

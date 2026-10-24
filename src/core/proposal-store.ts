@@ -2,7 +2,34 @@ import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import type { Proposal, ProposalType } from '../types.js';
-import { inferDocTypeFromPath, replaceSection } from './parser.js';
+import { formatMtime, inferDocTypeFromPath, replaceSection } from './parser.js';
+import { findHeadingIssues } from './sections.js';
+
+/** 本地日期 YYYY-MM-DD */
+function localToday(): string {
+  return formatMtime(Date.now());
+}
+
+/**
+ * 设置/替换 frontmatter 的 `updated:` 为指定日期。
+ * frontmatter 存在但缺少该键时插入；无 frontmatter 的文件原样返回。
+ */
+export function bumpUpdatedFrontmatter(markdown: string, date: string): string {
+  const m = /^(\uFEFF?---\r?\n)([\s\S]*?)(\r?\n---[ \t]*(?:\r?\n|$))/.exec(markdown);
+  if (!m) return markdown;
+  const eol = m[1]!.endsWith('\r\n') ? '\r\n' : '\n';
+  const yaml = m[2]!;
+  const line = `updated: "${date}"`;
+  const updatedRe = /^updated:.*$/m;
+  const newYaml = updatedRe.test(yaml) ? yaml.replace(updatedRe, line) : `${yaml}${yaml.length > 0 ? eol : ''}${line}`;
+  return `${m[1]}${newYaml}${m[3]}${markdown.slice(m[0].length)}`;
+}
+
+/** 写入后的结构检查：重复/空的二级标题 -> 提示文本 */
+function headingWarning(markdown: string): string | undefined {
+  const issues = findHeadingIssues(markdown);
+  return issues.length > 0 ? issues.join('；') : undefined;
+}
 
 const PROPOSALS_FILE = 'proposals.json';
 const BACKUP_DIR = 'backups';
@@ -117,12 +144,12 @@ export class ProposalStore {
         updated = `${existing.trimEnd()}\n\n${params.content.trim()}\n`;
       }
 
-      await writeFile(absTarget, updated, 'utf8');
+      await writeFile(absTarget, bumpUpdatedFrontmatter(updated, localToday()), 'utf8');
     } else {
       // 目标文件不存在：创建并补齐 frontmatter
       const effectiveTitle = params.title && params.title.trim() ? params.title.trim() : basename(cleanRel, extname(cleanRel));
       const type = inferDocTypeFromPath(cleanRel);
-      const today = new Date().toISOString().slice(0, 10);
+      const today = localToday();
 
       const frontmatter = [
         '---',
@@ -147,10 +174,15 @@ export class ProposalStore {
 
     const s = await stat(absTarget);
     let message = `已成功写入 \`${cleanRel}\``;
-    let warning: string | undefined;
+    const warnings: string[] = [];
     if (s.size > 4500) {
       const kb = (s.size / 1024).toFixed(1);
-      warning = `文件大小已达 ${kb}KB（超出 4.5KB 软上限，约 2000 汉字）。建议提炼核心结论，避免无序堆叠，过细历史请移入 Archive/`;
+      warnings.push(`文件大小已达 ${kb}KB（超出 4.5KB 软上限，约 2000 汉字）。建议提炼核心结论，避免无序堆叠，过细历史请移入 Archive/`);
+    }
+    const structural = headingWarning(await readFile(absTarget, 'utf8'));
+    if (structural) warnings.push(structural);
+    const warning = warnings.length > 0 ? warnings.join('；') : undefined;
+    if (warning) {
       message += `。⚠️ 提示: ${warning}`;
     }
 
@@ -171,7 +203,7 @@ export class ProposalStore {
   /**
    * 批准并应用提案（执行安全合并与历史自动备份）
    */
-  async approve(id: string): Promise<{ ok: boolean; message: string; targetPath: string }> {
+  async approve(id: string): Promise<{ ok: boolean; message: string; targetPath: string; warning?: string }> {
     const proposal = this.proposals.get(id);
     if (!proposal) {
       return { ok: false, message: `提案 ${id} 不存在`, targetPath: '' };
@@ -203,7 +235,7 @@ export class ProposalStore {
         `title: "${proposal.title.replace(/"/g, '\\"')}"`,
         `type: "${proposal.type === 'record_decision' ? 'decision' : 'general'}"`,
         'status: "active"',
-        `updated: "${new Date().toISOString().slice(0, 10)}"`,
+        `updated: "${localToday()}"`,
         '---',
         '',
         `# ${proposal.title}`,
@@ -227,17 +259,19 @@ export class ProposalStore {
       } else {
         updated = this.mergeSection(existing, proposal.section, proposal.content);
       }
-      await writeFile(absTarget, updated, 'utf8');
+      await writeFile(absTarget, bumpUpdatedFrontmatter(updated, localToday()), 'utf8');
     }
 
     proposal.status = 'applied';
     proposal.appliedAt = Date.now();
     await this.save();
 
+    const warning = headingWarning(await readFile(absTarget, 'utf8'));
     return {
       ok: true,
-      message: `提案 ${id} 已批准并成功写入 ${proposal.targetRelPath}`,
+      message: `提案 ${id} 已批准并成功写入 ${proposal.targetRelPath}${warning ? `。⚠️ 提示: ${warning}` : ''}`,
       targetPath: proposal.targetRelPath,
+      ...(warning ? { warning } : {}),
     };
   }
 
