@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-wiki",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Personal long-term context and Markdown Wiki plugin for DeepSeek Harness (DSH)",
   "keywords": [
     "deepseek",
@@ -53,10 +53,10 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-commands": "^0.1.2-rc.1",
-    "@deepseek-ai/dsh-llm": "^0.1.2-rc.1",
-    "@deepseek-ai/dsh-system-prompt": "^0.1.2-rc.1",
-    "@deepseek-ai/dsh-tools": "^0.1.2-rc.1"
+    "@deepseek-ai/dsh-commands": ">=0.1.2-rc.1 <0.3.0",
+    "@deepseek-ai/dsh-llm": ">=0.1.2-rc.1 <0.3.0",
+    "@deepseek-ai/dsh-system-prompt": ">=0.1.2-rc.1 <0.3.0",
+    "@deepseek-ai/dsh-tools": ">=0.1.2-rc.1 <0.3.0"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh-commands": {
