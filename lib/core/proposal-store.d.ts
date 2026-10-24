@@ -1,4 +1,9 @@
 import type { Proposal, ProposalType } from '../types.js';
+/**
+ * 设置/替换 frontmatter 的 `updated:` 为指定日期。
+ * frontmatter 存在但缺少该键时插入；无 frontmatter 的文件原样返回。
+ */
+export declare function bumpUpdatedFrontmatter(markdown: string, date: string): string;
 export declare class ProposalStore {
     private readonly wikiRoot;
     private proposals;
@@ -45,6 +50,7 @@ export declare class ProposalStore {
         ok: boolean;
         message: string;
         targetPath: string;
+        warning?: string;
     }>;
     /**
      * 拒绝提案

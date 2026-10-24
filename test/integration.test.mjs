@@ -28,9 +28,13 @@ Alpha 项目说明，依赖 [[Beta]]。
     // Mock DSH Context
     const registeredTools = new Map();
     const registeredCommands = new Map();
-    let injectedContextText = '';
+    const sections = new Map();
+    let preStep = null;
 
     const mockCtx = {
+      on(event, handler) {
+        if (event === 'agent/pre-step') preStep = handler;
+      },
       inject(deps, callback) {
         if (deps.includes('tools')) {
           callback({
@@ -53,8 +57,8 @@ Alpha 项目说明，依赖 [[Beta]]。
         if (deps.includes('systemPrompt')) {
           callback({
             systemPrompt: {
-              context(spec) {
-                injectedContextText = spec.text();
+              section(spec) {
+                sections.set(spec.name, spec);
               },
             },
           });
@@ -86,8 +90,16 @@ Alpha 项目说明，依赖 [[Beta]]。
     // 2. 验证 Commands 注册
     assert.ok(registeredCommands.has('wiki'));
 
-    // 3. 验证 System Context 注入了 Alpha 项目
-    assert.ok(injectedContextText.includes('Alpha'));
+    // 3. 验证静态协议 section 与 pre-step 监听已注册（Alpha 不在 Topics/ 下，不进入主题索引）
+    assert.ok(sections.has('wiki:protocol'));
+    assert.equal(typeof preStep, 'function');
+    const decision = await preStep(
+      { agent: { session: { seq: 0, eventAt: () => undefined } }, messages: [{ role: 'user', content: [], source: { kind: 'user' } }] },
+      async () => ({ kind: 'enter', messages: [] })
+    );
+    assert.equal(decision.messages.length, 1);
+    assert.equal(decision.messages[0].source.kind, 'wiki-context');
+    assert.ok(Object.keys(decision.messages[0].source.hashes).some((k) => k.startsWith('Project/Alpha.md#')));
 
     // 4. 执行 wiki_search
     const searchTool = registeredTools.get('wiki_search');
@@ -231,6 +243,7 @@ type: project
 
     const registeredTools = new Map();
     const mockCtx = {
+      on() {},
       inject(deps, callback) {
         if (deps.includes('tools')) {
           callback({
@@ -366,9 +379,9 @@ status: active
 
     const registeredTools = new Map();
     const registeredCommands = new Map();
-    let injectedContextText = '';
 
     const mockCtx = {
+      on() {},
       inject(deps, callback) {
         if (deps.includes('tools')) {
           callback({
@@ -391,9 +404,7 @@ status: active
         if (deps.includes('systemPrompt')) {
           callback({
             systemPrompt: {
-              context(spec) {
-                injectedContextText = spec.text();
-              },
+              section() {},
             },
           });
         }

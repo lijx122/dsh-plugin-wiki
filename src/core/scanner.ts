@@ -5,7 +5,7 @@ import type { DiskCache, WikiDoc } from '../types.js';
 import { parseWikiDoc } from './parser.js';
 
 // 解析/摘要逻辑变更时必须递增，否则旧缓存会继续供给过期的派生数据（如被抹掉 ~ 的摘要）
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 const CACHE_DIR = '.wiki';
 const CACHE_FILE = 'cache.json';
 

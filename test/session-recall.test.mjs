@@ -71,7 +71,7 @@ test('2. 目录解码、日期解析与文本清洗防御机制', () => {
 Current device time: 2026年10月08日
 </system-reminder>
 <environment_context>
-  <cwd>C:\\Users\\l</cwd>
+  <cwd>C:\\Users\\example</cwd>
 </environment_context>
 写成html或者pdf帮我总结公式
 Current runtime context. This snapshot supersedes earlier runtime-context snapshots.

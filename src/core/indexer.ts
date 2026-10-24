@@ -1,5 +1,6 @@
 import type { SearchMatch, WikiDoc } from '../types.js';
 import type { WikiGraph } from './graph.js';
+import { computeDocSections, type SectionEntry } from './sections.js';
 
 interface IndexedDoc {
   doc: WikiDoc;
@@ -9,12 +10,14 @@ interface IndexedDoc {
 export class WikiIndexer {
   private indexedDocs: Map<string, IndexedDoc> = new Map();
   private typeMap: Map<string, Set<string>> = new Map();
+  private sectionSnapshot: Map<string, SectionEntry> | null = null;
 
   constructor(private graph: WikiGraph) {}
 
   build(docs: WikiDoc[]): void {
     this.indexedDocs.clear();
     this.typeMap.clear();
+    this.sectionSnapshot = null;
 
     for (const doc of docs) {
       const tokens = tokenize(`${doc.title} ${doc.headings.join(' ')} ${doc.summary} ${(doc.frontmatter.tags ?? []).join(' ')}`);
@@ -108,6 +111,30 @@ export class WikiIndexer {
 
     results.sort((a, b) => b.score - a.score);
     return results.slice(0, limit);
+  }
+
+  /** 当前有效（未归档）词条：排除 Archive/ 目录与 status: archived */
+  getActiveDocs(): WikiDoc[] {
+    return Array.from(this.indexedDocs.values())
+      .map((i) => i.doc)
+      .filter((d) => !isArchivedDoc(d) && d.status.toLowerCase() !== 'archived');
+  }
+
+  /**
+   * 全库二级小节指纹快照（key = `<relPath>#<heading>`），排除归档词条。
+   * 结果按 build() 周期缓存，索引重建后自动失效。
+   */
+  getSectionSnapshot(): Map<string, SectionEntry> {
+    if (this.sectionSnapshot) return this.sectionSnapshot;
+    const snapshot = new Map<string, SectionEntry>();
+    const docs = this.getActiveDocs().sort((a, b) => a.relPath.localeCompare(b.relPath));
+    for (const doc of docs) {
+      for (const entry of computeDocSections(doc)) {
+        snapshot.set(entry.key, entry);
+      }
+    }
+    this.sectionSnapshot = snapshot;
+    return snapshot;
   }
 
   /**
@@ -258,7 +285,8 @@ function extractLeadParagraph(rawContent: string, fallback: string): string {
   return body || fallback;
 }
 
-function isArchivedDoc(doc: WikiDoc): boolean {  const normalized = doc.relPath.replace(/\\/g, '/').toLowerCase();
+export function isArchivedDoc(doc: WikiDoc): boolean {
+  const normalized = doc.relPath.replace(/\\/g, '/').toLowerCase();
   return normalized.startsWith('archive/');
 }
 
